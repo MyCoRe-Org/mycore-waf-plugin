@@ -95,6 +95,17 @@ public interface WAFService {
   boolean isPathAllowed(HttpServletRequest request);
 
   /**
+   * Checks if the request is a browser sub resource request (stylesheet, script, image, ...)
+   * that may bypass the challenge. The request must announce an allowed purpose via the
+   * {@code Sec-Fetch-Dest} header and must additionally either not be mapped to any servlet
+   * or match one of the configured sub resource paths.
+   *
+   * @param request the incoming HTTP request.
+   * @return true if the request is an allowed sub resource request, false otherwise.
+   */
+  boolean isAllowedSubResource(HttpServletRequest request);
+
+  /**
    * Checks if the request comes from a known bot (identified by User-Agent) whose
    * reverse DNS hostname matches the configured known bot DNS patterns.
    * The reverse DNS lookup is only performed if the User-Agent first matches a known
