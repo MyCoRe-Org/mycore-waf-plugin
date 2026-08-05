@@ -1,6 +1,8 @@
 package org.mycore.waf;
 
+import jakarta.servlet.http.HttpServletMapping;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.MappingMatch;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.UnknownHostException;
@@ -29,6 +31,10 @@ public class WAFAllowListChecker {
   private static final String CONFIG_VERIFY_REVERSE_DNS = "MCR.WAF.VerifyReverseDNS";
   private static final String CONFIG_DNS_CACHE_CAPACITY = "MCR.WAF.DNSCacheCapacity";
   private static final String CONFIG_DNS_CACHE_TTL_MINUTES = "MCR.WAF.DNSCacheTTLMinutes";
+  private static final String CONFIG_SUB_RESOURCE_DESTINATIONS = "MCR.WAF.SubResource.AllowedDestinations";
+  private static final String CONFIG_SUB_RESOURCE_PATHS = "MCR.WAF.SubResource.AllowedPaths";
+
+  private static final String HEADER_SEC_FETCH_DEST = "Sec-Fetch-Dest";
 
   private static final int DEFAULT_DNS_CACHE_CAPACITY = 1000;
   private static final int DEFAULT_DNS_CACHE_TTL_MINUTES = 60;
@@ -38,6 +44,8 @@ public class WAFAllowListChecker {
   private final List<Pattern> knownBotReverseDNSPatterns;
   private final List<String> knownBotUserAgents;
   private final boolean verifyReverseDNS;
+  private final List<String> allowedSubResourceDestinations;
+  private final List<Pattern> allowedSubResourcePathPatterns;
 
   // Cache for reverse DNS lookups (IP -> Hostname), bounded with TTL via MCRCache
   private final MCRCache<String, String> reverseDNSCache;
@@ -48,6 +56,8 @@ public class WAFAllowListChecker {
     this.knownBotReverseDNSPatterns = loadKnownBotReverseDNS();
     this.knownBotUserAgents = loadKnownBotUserAgents();
     this.verifyReverseDNS = MCRConfiguration2.getBoolean(CONFIG_VERIFY_REVERSE_DNS).orElse(true);
+    this.allowedSubResourceDestinations = loadAllowedSubResourceDestinations();
+    this.allowedSubResourcePathPatterns = loadPatterns(CONFIG_SUB_RESOURCE_PATHS, "sub resource path");
     int capacity = MCRConfiguration2.getInt(CONFIG_DNS_CACHE_CAPACITY).orElse(DEFAULT_DNS_CACHE_CAPACITY);
     this.reverseDNSCache = new MCRCache<>(capacity, "WAF Reverse DNS");
   }
@@ -75,8 +85,12 @@ public class WAFAllowListChecker {
   }
 
   private List<Pattern> loadAllowedPaths() {
+    return loadPatterns(CONFIG_ALLOWED_PATHS, "path");
+  }
+
+  private List<Pattern> loadPatterns(String property, String description) {
     List<Pattern> patterns = new ArrayList<>();
-    Optional<String> config = MCRConfiguration2.getString(CONFIG_ALLOWED_PATHS);
+    Optional<String> config = MCRConfiguration2.getString(property);
 
     if (config.isPresent() && !config.get().isEmpty()) {
       String[] paths = config.get().split(",");
@@ -85,15 +99,33 @@ public class WAFAllowListChecker {
         if (!path.isEmpty()) {
           try {
             patterns.add(Pattern.compile(path));
-            LOGGER.info("Added path pattern to allow list: {}", path);
+            LOGGER.info("Added {} pattern to allow list: {}", description, path);
           } catch (Exception e) {
-            LOGGER.error("Invalid path pattern in configuration: {}", path, e);
+            LOGGER.error("Invalid {} pattern in configuration: {}", description, path, e);
           }
         }
       }
     }
 
     return patterns;
+  }
+
+  private List<String> loadAllowedSubResourceDestinations() {
+    List<String> destinations = new ArrayList<>();
+    Optional<String> config = MCRConfiguration2.getString(CONFIG_SUB_RESOURCE_DESTINATIONS);
+
+    if (config.isPresent() && !config.get().isEmpty()) {
+      String[] values = config.get().split(",");
+      for (String value : values) {
+        value = value.trim();
+        if (!value.isEmpty()) {
+          destinations.add(value.toLowerCase(Locale.ROOT));
+          LOGGER.info("Added allowed Sec-Fetch-Dest value: {}", value);
+        }
+      }
+    }
+
+    return destinations;
   }
 
   private List<Pattern> loadKnownBotReverseDNS() {
@@ -172,6 +204,24 @@ public class WAFAllowListChecker {
       return false;
     }
 
+    String requestURI = getApplicationRelativePath(request);
+    for (Pattern pattern : allowedPathPatterns) {
+      if (pattern.matcher(requestURI).matches()) {
+        LOGGER.debug("Path {} matches allow list pattern: {}", requestURI, pattern);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Returns the request URI relative to the application base URL, i.e. with the context path
+   * stripped off.
+   *
+   * @param request the HTTP request
+   * @return the application relative path
+   */
+  private String getApplicationRelativePath(HttpServletRequest request) {
     String basePath = URI.create(MCRFrontendUtil.getBaseURL(request)).getPath();
     if (basePath.endsWith("/")) {
       basePath = basePath.substring(0, basePath.length() - 1);
@@ -180,13 +230,7 @@ public class WAFAllowListChecker {
     if (!basePath.isEmpty() && requestURI.startsWith(basePath)) {
       requestURI = requestURI.substring(basePath.length());
     }
-    for (Pattern pattern : allowedPathPatterns) {
-      if (pattern.matcher(requestURI).matches()) {
-        LOGGER.debug("Path {} matches allow list pattern: {}", requestURI, pattern);
-        return true;
-      }
-    }
-    return false;
+    return requestURI;
   }
 
   /**
@@ -302,12 +346,72 @@ public class WAFAllowListChecker {
   }
 
   /**
-   * Checks if either IP, path, or reverse DNS is on the allow list.
+   * Checks if the request is a browser sub resource request that may bypass the WAF challenge.
+   * <p>
+   * Browsers announce the purpose of a request via the {@code Sec-Fetch-Dest} header. A document
+   * that was served without a WAF-PASSED cookie (for example because its path is on the allow
+   * list) triggers follow-up requests for stylesheets, scripts, images and fonts. Those requests
+   * cannot solve a Proof of Work challenge, so they would fail.
+   * <p>
+   * Two conditions must be met: the {@code Sec-Fetch-Dest} value must be listed in
+   * {@link #CONFIG_SUB_RESOURCE_DESTINATIONS}, and the request must either not be mapped to any
+   * servlet (i.e. it is served by the container's default servlet) or its path must match one of
+   * the patterns in {@link #CONFIG_SUB_RESOURCE_PATHS}. The second condition keeps dynamically
+   * generated content behind the challenge even if a client forges the header.
    *
    * @param request the HTTP request
-   * @return true if IP, path, or reverse DNS is allowed, false otherwise
+   * @return true if the request is an allowed sub resource request, false otherwise
+   */
+  public boolean isAllowedSubResource(HttpServletRequest request) {
+    if (allowedSubResourceDestinations.isEmpty()) {
+      return false;
+    }
+
+    String destination = request.getHeader(HEADER_SEC_FETCH_DEST);
+    if (destination == null || destination.isEmpty()) {
+      return false;
+    }
+    if (!allowedSubResourceDestinations.contains(destination.toLowerCase(Locale.ROOT))) {
+      LOGGER.debug("Sec-Fetch-Dest {} is not on the allow list", destination);
+      return false;
+    }
+
+    if (isServedByDefaultServlet(request)) {
+      LOGGER.debug("Sub resource request with Sec-Fetch-Dest {} is not mapped to a servlet", destination);
+      return true;
+    }
+
+    String requestURI = getApplicationRelativePath(request);
+    for (Pattern pattern : allowedSubResourcePathPatterns) {
+      if (pattern.matcher(requestURI).matches()) {
+        LOGGER.debug("Sub resource path {} matches allow list pattern: {}", requestURI, pattern);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Checks whether the request is handled by the container's default servlet, which means that no
+   * servlet mapping matched the request. This is the case for static files that are delivered
+   * directly from the web application.
+   *
+   * @param request the HTTP request
+   * @return true if no servlet mapping matched the request, false otherwise
+   */
+  private boolean isServedByDefaultServlet(HttpServletRequest request) {
+    HttpServletMapping mapping = request.getHttpServletMapping();
+    return mapping != null && mapping.getMappingMatch() == MappingMatch.DEFAULT;
+  }
+
+  /**
+   * Checks if either IP, path, reverse DNS, or a browser sub resource request is on the allow list.
+   *
+   * @param request the HTTP request
+   * @return true if IP, path, reverse DNS, or sub resource is allowed, false otherwise
    */
   public boolean isAllowed(HttpServletRequest request) {
-    return isIPAllowed(request) || isPathAllowed(request) || isKnownBotAllowedByReverseDNS(request);
+    return isIPAllowed(request) || isPathAllowed(request) || isAllowedSubResource(request)
+        || isKnownBotAllowedByReverseDNS(request);
   }
 }

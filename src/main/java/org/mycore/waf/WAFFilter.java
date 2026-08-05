@@ -66,6 +66,13 @@ public class WAFFilter extends HttpFilter {
       return true;
     }
 
+    // Check if this is a browser sub resource request (CSS, JS, images, ...) that cannot
+    // solve a challenge on its own
+    if (wafService.isAllowedSubResource(req)) {
+      LOGGER.debug("{} Request is an allowed sub resource. Allowing request to proceed.", ipInfo);
+      return true;
+    }
+
     if (wafService.validateWAFPassedCookie(req)) {
       LOGGER.debug("{} Valid WAF-PASSED cookie found. Allowing request to proceed.", ipInfo);
       return true;

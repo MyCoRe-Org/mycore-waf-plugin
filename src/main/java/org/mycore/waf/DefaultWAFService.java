@@ -456,6 +456,11 @@ public class DefaultWAFService implements WAFService {
   }
 
   @Override
+  public boolean isAllowedSubResource(HttpServletRequest request) {
+    return allowListChecker.isAllowedSubResource(request);
+  }
+
+  @Override
   public boolean isKnownBotAllowedByReverseDNS(HttpServletRequest request) {
     return allowListChecker.isKnownBotAllowedByReverseDNS(request);
   }
