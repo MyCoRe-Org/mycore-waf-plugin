@@ -5,7 +5,7 @@ A Web Application Firewall (WAF) plugin for [MyCoRe](https://www.mycore.de/) app
 ## How it works
 
 1. An incoming request hits the `WAFFilter`, which is automatically registered for all URLs (`/*`) on startup.
-2. The filter checks allow lists in order: path → IP range → valid `WAF-PASSED` cookie → known bot reverse DNS. Matching requests pass through immediately.
+2. The filter checks allow lists in order: path → IP range → browser sub resource → valid `WAF-PASSED` cookie → known bot reverse DNS. Matching requests pass through immediately.
 3. For the reverse DNS check, the User-Agent is inspected first. Only if it matches a known bot pattern (e.g. `Googlebot`, `bingbot`) is the expensive DNS lookup performed and the resolved hostname verified.
 4. If no allow list matches, the client is redirected to the PoW challenge page.
 5. The browser solves the SHA-256 PoW challenge in JavaScript and submits the solution.
@@ -17,6 +17,7 @@ Request
   │
   ├─ Path allow list match?              ──yes──> pass through
   ├─ IP allow list match?                ──yes──> pass through
+  ├─ Allowed browser sub resource?       ──yes──> pass through
   ├─ Valid WAF-PASSED cookie?            ──yes──> pass through
   ├─ Known bot UA + reverse DNS match?   ──yes──> pass through
   ├─ Challenge solution submitted?       ──yes──> validate → set cookie → redirect to original URL
@@ -69,6 +70,28 @@ MCR.WAF.KnownBotUserAgents=%MCR.WAF.KnownBotUserAgents%,MyCustomBot
 MCR.WAF.KnownBotReverseDNS=%MCR.WAF.KnownBotReverseDNS%,*.mycustombot.example.com
 ```
 
+### Browser Sub Resources
+
+A page that is served without a `WAF-PASSED` cookie, for example because its path is on the allow list, makes the browser request sub resources such as stylesheets, scripts and images. Those requests cannot solve a Proof of Work challenge, so without this feature they would be redirected to the challenge page and the document would render broken.
+
+Browsers announce the purpose of a request in the [`Sec-Fetch-Dest`](https://developer.mozilla.org/docs/Web/HTTP/Reference/Headers/Sec-Fetch-Dest) header. A request bypasses the challenge only if **both** conditions hold:
+
+1. The `Sec-Fetch-Dest` value is listed in `MCR.WAF.SubResource.AllowedDestinations`.
+2. The request is **not** mapped to any servlet, meaning it is served as a static file by the container's default servlet (`HttpServletMapping` reports `MappingMatch.DEFAULT`), **or** its path matches one of the patterns in `MCR.WAF.SubResource.AllowedPaths`.
+
+The second condition is required because `Sec-Fetch-Dest` is sent by the client and can be forged. It keeps dynamically generated content behind the challenge. In a standard MyCoRe application no servlet is mapped to `/`, so static files land on the default servlet, while `*.xml` (`MCRStaticXMLFileServlet`) and `*.xed` / `*.xhtml` (XEditor) keep an `EXTENSION` mapping match and therefore stay protected.
+
+| Property                                   | Default                          | Description                                                                                                                                       |
+|--------------------------------------------|----------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
+| `MCR.WAF.SubResource.AllowedDestinations`  | `style,script,image,font,xslt`   | Comma-separated `Sec-Fetch-Dest` values (case-insensitive). An empty value disables the sub resource bypass entirely.                              |
+| `MCR.WAF.SubResource.AllowedPaths`         | `/rsc/sass/.+`                   | Comma-separated Java regex patterns matched against the request path (without context path). Only evaluated when the `Sec-Fetch-Dest` value was accepted. |
+
+`MCR.WAF.SubResource.AllowedPaths` covers sub resources that are delivered by a servlet instead of the default servlet, so the mapping check alone does not let them through. The default entry is the compiled CSS served by MyCoRe's JAX-RS resource `MCRSassResource`. Assets that the container itself serves from a JAR's `META-INF/resources`, WebJars for example, already pass via the mapping check and need no entry here. Extend the list via property inheritance:
+
+```properties
+MCR.WAF.SubResource.AllowedPaths=%MCR.WAF.SubResource.AllowedPaths%,/my-assets/.+
+```
+
 ### Reverse DNS Cache
 
 Reverse DNS lookups are expensive. Results are cached in a bounded `MCRCache`.
@@ -105,6 +128,7 @@ Templates use `{{key}}` placeholders. Keys are resolved first from explicitly pa
 - **Challenge tokens:** Signed JWTs with a short expiry (default 2 minutes). They include the client IP, so a token captured by a third party cannot be used to pass the challenge.
 - **Proof of Work:** The nonce submitted by the client is validated server-side using SHA-256. The difficulty is embedded in the signed token and cannot be tampered with by the client.
 - **Reverse DNS spoofing:** When `MCR.WAF.VerifyReverseDNS=true` (the default), the plugin performs a forward DNS lookup to confirm that the resolved hostname actually points back to the original IP, preventing DNS spoofing attacks. Additionally, the DNS lookup is only triggered when the User-Agent already identifies the request as a known bot — arbitrary requests never incur a DNS lookup.
+- **Sub resource bypass:** The `Sec-Fetch-Dest` header comes from the client and can be forged, so it is never sufficient on its own. A request also has to be unmapped (static file) or match `MCR.WAF.SubResource.AllowedPaths`. Note that a request to a non-existing path is unmapped as well, so 404 responses are reachable without solving a challenge.
 - **Bot detection:** In addition to the PoW check, the plugin inspects the browser fingerprint submitted with the solution (User-Agent, WebDriver flag, screen resolution, language list, etc.) to reject obvious bots even if they manage to solve the hash challenge.
 
 ## License
