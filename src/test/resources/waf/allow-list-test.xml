@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<allow-list xmlns="http://www.mycore.org/waf"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.mycore.org/waf waf/allow-list.xsd">
+  <rule name="sru-style-xml">
+    <and>
+      <method value="GET"/>
+      <path pattern="/sru"/>
+      <parameter name="style" pattern="xml" unique="true" sole="true"/>
+    </and>
+  </rule>
+  <rule name="assets">
+    <and>
+      <header name="Sec-Fetch-Dest" pattern="style|script|font|image"/>
+      <path pattern=".*\.(css|js|png|woff2)"/>
+    </and>
+  </rule>
+  <rule name="googlebot">
+    <and>
+      <user-agent pattern=".*Googlebot/2\.1.*"/>
+      <remote-address cidr="66.249.64.0/19"/>
+    </and>
+  </rule>
+  <rule name="internal">
+    <remote-address pattern="192\.168\..*"/>
+  </rule>
+  <rule name="clean-get">
+    <and>
+      <method value="GET, HEAD"/>
+      <path pattern="/search.*"/>
+      <parameter-count value="0"/>
+    </and>
+  </rule>
+  <rule name="tag-search">
+    <and>
+      <path pattern="/tags"/>
+      <parameter-count max="3" mode="values"/>
+      <parameter name="tag" pattern="[a-z0-9]+"/>
+    </and>
+  </rule>
+  <rule name="rss">
+    <and>
+      <path pattern="/rss"/>
+      <cookie name="session" pattern=".*"/>
+      <content-type pattern="application/.*"/>
+      <query-string pattern=".*sort=date.*"/>
+    </and>
+  </rule>
+  <rule name="no-style-plain">
+    <and>
+      <path pattern="/plain"/>
+      <not>
+        <parameter name="style"/>
+      </not>
+    </and>
+  </rule>
+</allow-list>
