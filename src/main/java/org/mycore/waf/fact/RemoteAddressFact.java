@@ -4,9 +4,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.xml.bind.annotation.XmlAccessType;
 import jakarta.xml.bind.annotation.XmlAccessorType;
 import jakarta.xml.bind.annotation.XmlAttribute;
-import java.math.BigInteger;
 import java.util.regex.Pattern;
-import java.util.regex.PatternSyntaxException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.mycore.frontend.MCRFrontendUtil;
@@ -24,17 +22,17 @@ public class RemoteAddressFact extends Fact {
 
     private static final Logger LOGGER = LogManager.getLogger();
 
-    private static final Pattern NEVER_MATCHES = Pattern.compile("(?!)");
-
     @XmlAttribute
     private String cidr;
 
     @XmlAttribute
     private String pattern;
 
-    private transient IPRange range;
+    private transient volatile IPRange range;
 
-    private transient Pattern compiledPattern;
+    private transient volatile boolean invalidRange;
+
+    private transient volatile Pattern compiledPattern;
 
     @Override
     public boolean matches(HttpServletRequest request) {
@@ -55,12 +53,12 @@ public class RemoteAddressFact extends Fact {
     }
 
     private IPRange getRange() {
-        if (range == null) {
+        if (range == null && !invalidRange) {
             try {
                 range = IPRange.parse(cidr);
             } catch (IllegalArgumentException e) {
                 LOGGER.error("Invalid CIDR range '{}' in remote-address fact: {}", cidr, e.getMessage());
-                range = new IPRange(BigInteger.ONE, BigInteger.ZERO);
+                invalidRange = true;
             }
         }
         return range;
@@ -68,12 +66,7 @@ public class RemoteAddressFact extends Fact {
 
     private Pattern getCompiledPattern() {
         if (compiledPattern == null) {
-            try {
-                compiledPattern = Pattern.compile(pattern);
-            } catch (PatternSyntaxException e) {
-                LOGGER.error("Invalid regular expression '{}' in remote-address fact: {}", pattern, e.getMessage());
-                compiledPattern = NEVER_MATCHES;
-            }
+            compiledPattern = RegexFact.compilePattern(pattern, "remote-address fact");
         }
         return compiledPattern;
     }

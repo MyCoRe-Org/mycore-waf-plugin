@@ -24,7 +24,7 @@ public abstract class RegexFact extends Fact {
     @XmlAttribute(required = true)
     private String pattern;
 
-    private transient Pattern compiledPattern;
+    private transient volatile Pattern compiledPattern;
 
     @Override
     public boolean matches(HttpServletRequest request) {
@@ -42,15 +42,26 @@ public abstract class RegexFact extends Fact {
      */
     protected abstract String getValue(HttpServletRequest request);
 
+    /**
+     * Compiles a regex, logging the error and returning a pattern that never matches if the regex is
+     * invalid.
+     *
+     * @param regex the regular expression
+     * @param context a description of the fact for the error message
+     * @return the compiled pattern, or a never matching pattern if the regex is invalid
+     */
+    static Pattern compilePattern(String regex, String context) {
+        try {
+            return Pattern.compile(regex);
+        } catch (PatternSyntaxException e) {
+            LOGGER.error("Invalid regular expression '{}' in {}: {}", regex, context, e.getMessage());
+            return NEVER_MATCHES;
+        }
+    }
+
     protected Pattern getCompiledPattern() {
         if (compiledPattern == null) {
-            try {
-                compiledPattern = Pattern.compile(pattern);
-            } catch (PatternSyntaxException e) {
-                LOGGER.error("Invalid regular expression '{}' in fact {}: {}", pattern,
-                    getClass().getSimpleName(), e.getMessage());
-                compiledPattern = NEVER_MATCHES;
-            }
+            compiledPattern = compilePattern(pattern, getClass().getSimpleName());
         }
         return compiledPattern;
     }
