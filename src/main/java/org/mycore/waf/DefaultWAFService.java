@@ -52,6 +52,7 @@ public class DefaultWAFService implements WAFService {
 
   // Services
   private final WAFAllowListChecker allowListChecker;
+  private final WAFAllowRules allowRules;
   private final BotDetectionService botDetectionService;
   private final ProofOfWorkValidator powValidator;
   private final SecureRandom secureRandom;
@@ -59,6 +60,7 @@ public class DefaultWAFService implements WAFService {
 
   public DefaultWAFService() {
     this.allowListChecker = new WAFAllowListChecker();
+    this.allowRules = WAFAllowRules.load();
     this.botDetectionService = new BotDetectionService();
     this.powValidator = new ProofOfWorkValidator();
     this.secureRandom = new SecureRandom();
@@ -463,6 +465,11 @@ public class DefaultWAFService implements WAFService {
   @Override
   public boolean isKnownBotAllowedByReverseDNS(HttpServletRequest request) {
     return allowListChecker.isKnownBotAllowedByReverseDNS(request);
+  }
+
+  @Override
+  public boolean isRuleAllowed(HttpServletRequest request) {
+    return allowRules.isAllowed(request);
   }
 
 }

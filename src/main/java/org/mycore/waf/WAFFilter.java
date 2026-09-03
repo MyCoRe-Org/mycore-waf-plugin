@@ -66,6 +66,12 @@ public class WAFFilter extends HttpFilter {
       return true;
     }
 
+    // Check if the request matches the configured XML allow rules
+    if (wafService.isRuleAllowed(req)) {
+      LOGGER.debug("{} Request matches XML allow rules. Allowing request to proceed.", ipInfo);
+      return true;
+    }
+
     // Check if this is a browser sub resource request (CSS, JS, images, ...) that cannot
     // solve a challenge on its own
     if (wafService.isAllowedSubResource(req)) {

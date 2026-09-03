@@ -221,7 +221,7 @@ public class WAFAllowListChecker {
    * @param request the HTTP request
    * @return the application relative path
    */
-  private String getApplicationRelativePath(HttpServletRequest request) {
+  public static String getApplicationRelativePath(HttpServletRequest request) {
     String basePath = URI.create(MCRFrontendUtil.getBaseURL(request)).getPath();
     if (basePath.endsWith("/")) {
       basePath = basePath.substring(0, basePath.length() - 1);

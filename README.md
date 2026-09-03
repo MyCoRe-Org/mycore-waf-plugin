@@ -5,7 +5,7 @@ A Web Application Firewall (WAF) plugin for [MyCoRe](https://www.mycore.de/) app
 ## How it works
 
 1. An incoming request hits the `WAFFilter`, which is automatically registered for all URLs (`/*`) on startup.
-2. The filter checks allow lists in order: path → IP range → browser sub resource → valid `WAF-PASSED` cookie → known bot reverse DNS. Matching requests pass through immediately.
+2. The filter checks allow lists in order: path → IP range → XML allow rules → browser sub resource → valid `WAF-PASSED` cookie → known bot reverse DNS. Matching requests pass through immediately.
 3. For the reverse DNS check, the User-Agent is inspected first. Only if it matches a known bot pattern (e.g. `Googlebot`, `bingbot`) is the expensive DNS lookup performed and the resolved hostname verified.
 4. If no allow list matches, the client is redirected to the PoW challenge page.
 5. The browser solves the SHA-256 PoW challenge in JavaScript and submits the solution.
@@ -17,6 +17,7 @@ Request
   │
   ├─ Path allow list match?              ──yes──> pass through
   ├─ IP allow list match?                ──yes──> pass through
+  ├─ XML allow rule match?               ──yes──> pass through
   ├─ Allowed browser sub resource?       ──yes──> pass through
   ├─ Valid WAF-PASSED cookie?            ──yes──> pass through
   ├─ Known bot UA + reverse DNS match?   ──yes──> pass through
@@ -69,6 +70,70 @@ The same inheritance pattern works for the bot properties:
 MCR.WAF.KnownBotUserAgents=%MCR.WAF.KnownBotUserAgents%,MyCustomBot
 MCR.WAF.KnownBotReverseDNS=%MCR.WAF.KnownBotReverseDNS%,*.mycustombot.example.com
 ```
+
+### XML Allow Rules
+
+For fine grained control the allow lists can be extended with XML rule files, parsed with JAXB. Each file contains a root `allow-list` element with any number of `rule` elements. A rule holds exactly one fact element, which may be a combinator (`and`, `or`, `not`) that contains further facts. A request passes the WAF without further checks if any rule of any configured file matches. The XML rules coexist with the properties above: path, IP, sub resource, cookie and reverse DNS allow lists keep working unchanged.
+
+| Property                | Default  | Description                                                                                         |
+|-------------------------|----------|-----------------------------------------------------------------------------------------------------|
+| `MCR.WAF.AllowedRules`  | _(none)_ | Comma separated list of classpath resources with allow rule files, for example `waf/allow-list.xml`. |
+
+Example that allows `GET /sru?style=xml` but rejects `?style=xml&style=json` and `?style=xml&foo=bar`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<allow-list xmlns="http://www.mycore.org/waf">
+  <rule name="sru-style-xml">
+    <and>
+      <method value="GET"/>
+      <path pattern="/sru"/>
+      <parameter name="style" pattern="xml" unique="true" sole="true"/>
+    </and>
+  </rule>
+</allow-list>
+```
+
+Available facts:
+
+| Element           | Attributes                       | True if                                                                                                                              |
+|-------------------|----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------|
+| `and`             |                                  | all child facts are true, fails closed if empty                                                                                       |
+| `or`              |                                  | at least one child fact is true                                                                                                      |
+| `not`             |                                  | the single child fact is false, fails closed if empty                                                                                |
+| `method`          | `value`                         | the HTTP method is in the comma separated list, ignoring case                                                                        |
+| `path`            | `pattern`                       | the regex fully matches the path relative to the application base URL, like `MCR.WAF.AllowedPaths`                                    |
+| `parameter`       | `name`, `pattern`, `unique`, `sole` | a request parameter matches, see below                                                                                              |
+| `parameter-count` | `value`, `min`, `max`, `mode`    | the number of request parameters matches, all constraints are combined                                                               |
+| `header`          | `name`, `pattern`               | the header value fully matches the regex, the header name is looked up ignoring case                                                  |
+| `user-agent`      | `pattern`                       | shortcut for `<header name="User-Agent" pattern="..."/>`                                                                              |
+| `remote-address`  | `cidr` or `pattern`             | the client IP (honoring trusted proxies) lies in the CIDR range or fully matches the regex, `cidr` takes precedence                   |
+| `cookie`          | `name`, `pattern`               | a cookie with the name exists, optionally with a value fully matching the regex                                                       |
+| `content-type`    | `pattern`                       | the content type of the request fully matches the regex, false if the request has none                                                |
+| `query-string`    | `pattern`                       | the raw query string fully matches the regex, false if the request has none                                                           |
+
+The `parameter` fact offers two constraints beyond a plain value check:
+
+- `unique="true"`: the parameter name occurs exactly once in the whole request, so `?style=xml` is accepted while `?style=xml&style=json` is rejected.
+- `sole="true"`: no other parameter name exists in the request, so `?style=xml` is accepted while `?style=xml&foo=bar` is rejected.
+
+The `parameter` fact is true if a parameter with the given name exists when `pattern` is omitted. The `parameter-count` fact counts distinct parameter names by default, with `mode="values"` it counts the total number of parameter occurrences.
+
+All regexes are matched with `Matcher.matches()`, so the whole value has to match, not just a part of it. Rule files are validated against the packaged schema and checked for semantic errors before they are activated. Files that cannot be found, parsed or validated are logged as errors and skipped, requests then have to solve the challenge.
+
+#### XML Schema
+
+The XML schema for the rule files is generated from the JAXB model during the build and is packaged as `waf/allow-list.xsd` inside the JAR. Extract it and reference it to get validation and auto completion in XML editors:
+
+```xml
+<allow-list xmlns="http://www.mycore.org/waf"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="http://www.mycore.org/waf allow-list.xsd">
+  ...
+</allow-list>
+```
+
+The schema enforces that every `rule` contains exactly one fact element. Constraints that cannot be expressed in the schema are checked while loading. This includes nonempty combinators, valid regular expressions and consistent, nonnegative `parameter-count` constraints.
 
 ### Browser Sub Resources
 

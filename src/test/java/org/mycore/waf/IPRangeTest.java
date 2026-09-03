@@ -1,5 +1,6 @@
 package org.mycore.waf;
 
+import java.math.BigInteger;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -58,6 +59,7 @@ class IPRangeTest {
         IPRange range = IPRange.parse("0.0.0.0/0");
         assertTrue(range.contains("1.2.3.4"));
         assertTrue(range.contains("255.255.255.255"));
+        assertFalse(range.contains("::1"));
     }
 
     @Test
@@ -122,6 +124,13 @@ class IPRangeTest {
         assertFalse(range.contains("fe80:0:0:1::1"));
     }
 
+    @Test
+    void ipv6Cidr_slash0DoesNotMatchIpv4Address() {
+        IPRange range = IPRange.parse("::/0");
+        assertTrue(range.contains("2001:db8::1"));
+        assertFalse(range.contains("8.8.8.8"));
+    }
+
     // --- Cross-family: IPv4 range vs IPv6 address ---
 
     @Test
@@ -136,11 +145,33 @@ class IPRangeTest {
         assertFalse(range.contains("192.168.1.1"));
     }
 
+    @Test
+    void publicConstructor_doesNotMixAddressFamilies() {
+        IPRange ipv4Range = new IPRange(BigInteger.ZERO, BigInteger.ONE.shiftLeft(32).subtract(BigInteger.ONE));
+        assertTrue(ipv4Range.contains("127.0.0.1"));
+        assertFalse(ipv4Range.contains("::1"));
+
+        IPRange ipv6Range = new IPRange(BigInteger.ZERO, BigInteger.ONE.shiftLeft(64));
+        assertTrue(ipv6Range.contains("::1"));
+        assertFalse(ipv6Range.contains("127.0.0.1"));
+    }
+
     // --- Invalid input ---
 
     @Test
     void parse_invalidAddress_throwsIllegalArgumentException() {
         assertThrows(IllegalArgumentException.class, () -> IPRange.parse("not-an-ip"));
+    }
+
+    @Test
+    void parse_negativePrefix_throwsIllegalArgumentException() {
+        assertThrows(IllegalArgumentException.class, () -> IPRange.parse("192.168.1.0/-1"));
+    }
+
+    @Test
+    void parse_prefixBeyondAddressLength_throwsIllegalArgumentException() {
+        assertThrows(IllegalArgumentException.class, () -> IPRange.parse("192.168.1.0/33"));
+        assertThrows(IllegalArgumentException.class, () -> IPRange.parse("2001:db8::/129"));
     }
 
     @Test

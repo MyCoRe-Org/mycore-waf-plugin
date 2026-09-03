@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<allow-list xmlns="http://www.mycore.org/waf">
+  <rule>
+    <remote-address cidr="192.168.1.0/-1"/>
+  </rule>
+</allow-list>
