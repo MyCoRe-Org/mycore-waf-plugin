@@ -42,6 +42,14 @@ public class NotFact extends Fact {
         return !fact.matches(request);
     }
 
+    @Override
+    void validate() {
+        if (fact == null) {
+            throw new IllegalArgumentException("'not' fact has no child fact");
+        }
+        fact.validate();
+    }
+
     public Fact getFact() {
         return fact;
     }

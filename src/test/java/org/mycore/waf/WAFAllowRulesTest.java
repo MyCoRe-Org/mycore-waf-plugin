@@ -2,6 +2,7 @@ package org.mycore.waf;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -190,6 +191,41 @@ public class WAFAllowRulesTest extends MCRTestCase {
     @Test
     public void unknownPathIsRejected() {
         assertFalse(allowList.isAllowed(request("GET", "/documents/42")));
+    }
+
+    @Test
+    public void schemaInvalidRuleIsRejectedWhenLoaded() {
+        assertNull(WAFAllowRules.loadAllowList("waf/allow-list-two-facts.xml"));
+    }
+
+    @Test
+    public void invalidRegexIsRejectedWhenLoaded() {
+        assertNull(WAFAllowRules.loadAllowList("waf/allow-list-invalid-regex.xml"));
+    }
+
+    @Test
+    public void unconstrainedParameterCountIsRejectedWhenLoaded() {
+        assertNull(WAFAllowRules.loadAllowList("waf/allow-list-unconstrained-count.xml"));
+    }
+
+    @Test
+    public void contradictoryParameterCountIsRejectedWhenLoaded() {
+        assertNull(WAFAllowRules.loadAllowList("waf/allow-list-contradictory-count.xml"));
+    }
+
+    @Test
+    public void emptyNestedCombinatorIsRejectedWhenLoaded() {
+        assertNull(WAFAllowRules.loadAllowList("waf/allow-list-empty-combinator.xml"));
+    }
+
+    @Test
+    public void invalidCidrIsRejectedWhenLoaded() {
+        assertNull(WAFAllowRules.loadAllowList("waf/allow-list-invalid-cidr.xml"));
+    }
+
+    @Test
+    public void ruleAllowedMethodHasCompatibilityDefault() throws NoSuchMethodException {
+        assertTrue(WAFService.class.getMethod("isRuleAllowed", HttpServletRequest.class).isDefault());
     }
 
     @Test

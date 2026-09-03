@@ -32,6 +32,15 @@ public class AllowList {
         return rules.stream().anyMatch(rule -> rule.matches(request));
     }
 
+    /**
+     * Validates all rules before this allow list is used for request matching.
+     *
+     * @throws IllegalArgumentException if a rule is not semantically valid
+     */
+    public void validate() {
+        rules.forEach(AllowRule::validate);
+    }
+
     public List<AllowRule> getRules() {
         return rules;
     }

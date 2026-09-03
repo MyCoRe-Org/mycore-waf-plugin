@@ -44,6 +44,14 @@ public class AndFact extends Fact {
         return facts.stream().allMatch(fact -> fact.matches(request));
     }
 
+    @Override
+    void validate() {
+        if (facts.isEmpty()) {
+            throw new IllegalArgumentException("'and' fact has no child facts");
+        }
+        facts.forEach(Fact::validate);
+    }
+
     public List<Fact> getFacts() {
         return facts;
     }

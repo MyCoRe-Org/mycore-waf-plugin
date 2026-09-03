@@ -52,11 +52,28 @@ public abstract class RegexFact extends Fact {
      */
     static Pattern compilePattern(String regex, String context) {
         try {
-            return Pattern.compile(regex);
-        } catch (PatternSyntaxException e) {
-            LOGGER.error("Invalid regular expression '{}' in {}: {}", regex, context, e.getMessage());
+            return requireValidPattern(regex, context);
+        } catch (IllegalArgumentException e) {
+            LOGGER.error("{}", e.getMessage());
             return NEVER_MATCHES;
         }
+    }
+
+    static Pattern requireValidPattern(String regex, String context) {
+        if (regex == null) {
+            throw new IllegalArgumentException("Missing regular expression in " + context);
+        }
+        try {
+            return Pattern.compile(regex);
+        } catch (PatternSyntaxException e) {
+            throw new IllegalArgumentException(
+                "Invalid regular expression '" + regex + "' in " + context + ": " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    void validate() {
+        compiledPattern = requireValidPattern(pattern, getClass().getSimpleName());
     }
 
     protected Pattern getCompiledPattern() {

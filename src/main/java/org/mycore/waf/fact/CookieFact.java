@@ -51,4 +51,11 @@ public class CookieFact extends Fact {
         return compiledPattern;
     }
 
+    @Override
+    void validate() {
+        if (pattern != null) {
+            compiledPattern = RegexFact.requireValidPattern(pattern, "cookie fact");
+        }
+    }
+
 }

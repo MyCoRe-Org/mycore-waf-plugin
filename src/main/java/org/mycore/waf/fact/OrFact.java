@@ -37,6 +37,14 @@ public class OrFact extends Fact {
         return facts.stream().anyMatch(fact -> fact.matches(request));
     }
 
+    @Override
+    void validate() {
+        if (facts.isEmpty()) {
+            throw new IllegalArgumentException("'or' fact has no child facts");
+        }
+        facts.forEach(Fact::validate);
+    }
+
     public List<Fact> getFacts() {
         return facts;
     }

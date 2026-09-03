@@ -119,7 +119,7 @@ The `parameter` fact offers two constraints beyond a plain value check:
 
 The `parameter` fact is true if a parameter with the given name exists when `pattern` is omitted. The `parameter-count` fact counts distinct parameter names by default, with `mode="values"` it counts the total number of parameter occurrences.
 
-All regexes are matched with `Matcher.matches()`, so the whole value has to match, not just a part of it. Rule files that cannot be found or parsed are logged as errors and skipped, requests then have to solve the challenge. Misconfigured facts, for example an invalid regex, fail closed as well.
+All regexes are matched with `Matcher.matches()`, so the whole value has to match, not just a part of it. Rule files are validated against the packaged schema and checked for semantic errors before they are activated. Files that cannot be found, parsed or validated are logged as errors and skipped, requests then have to solve the challenge.
 
 #### XML Schema
 
@@ -133,7 +133,7 @@ The XML schema for the rule files is generated from the JAXB model during the bu
 </allow-list>
 ```
 
-The schema enforces that every `rule` contains exactly one fact element, but cannot enforce that `and` and `or` contain at least one child fact: such rules fail closed at runtime and are logged as warnings.
+The schema enforces that every `rule` contains exactly one fact element. Constraints that cannot be expressed in the schema are checked while loading. This includes nonempty combinators, valid regular expressions and consistent, nonnegative `parameter-count` constraints.
 
 ### Browser Sub Resources
 

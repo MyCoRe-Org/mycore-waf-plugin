@@ -58,4 +58,19 @@ public class ParameterCountFact extends Fact {
         return true;
     }
 
+    @Override
+    void validate() {
+        if (value == null && min == null && max == null) {
+            throw new IllegalArgumentException("parameter-count fact has no count constraint");
+        }
+        if ((value != null && value < 0) || (min != null && min < 0) || (max != null && max < 0)) {
+            throw new IllegalArgumentException("parameter-count constraints must not be negative");
+        }
+        if ((min != null && max != null && min > max)
+            || (value != null && min != null && value < min)
+            || (value != null && max != null && value > max)) {
+            throw new IllegalArgumentException("parameter-count constraints contradict each other");
+        }
+    }
+
 }

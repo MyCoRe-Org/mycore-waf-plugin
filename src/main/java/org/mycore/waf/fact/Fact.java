@@ -9,6 +9,9 @@ import jakarta.servlet.http.HttpServletRequest;
  */
 public abstract class Fact {
 
+    void validate() {
+    }
+
     /**
      * Evaluates this fact against the given request.
      *

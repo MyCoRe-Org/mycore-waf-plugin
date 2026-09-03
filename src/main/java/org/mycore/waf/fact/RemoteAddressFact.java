@@ -71,4 +71,19 @@ public class RemoteAddressFact extends Fact {
         return compiledPattern;
     }
 
+    @Override
+    void validate() {
+        if (cidr != null) {
+            try {
+                range = IPRange.parse(cidr);
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("Invalid CIDR range '" + cidr + "' in remote-address fact", e);
+            }
+        } else if (pattern != null) {
+            compiledPattern = RegexFact.requireValidPattern(pattern, "remote-address fact");
+        } else {
+            throw new IllegalArgumentException("remote-address fact has neither cidr nor pattern");
+        }
+    }
+
 }

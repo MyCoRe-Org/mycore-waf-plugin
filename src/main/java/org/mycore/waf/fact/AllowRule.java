@@ -59,6 +59,13 @@ public class AllowRule {
         return result;
     }
 
+    void validate() {
+        if (fact == null) {
+            throw new IllegalArgumentException("Allow rule '" + name + "' has no fact");
+        }
+        fact.validate();
+    }
+
     public String getName() {
         return name;
     }
