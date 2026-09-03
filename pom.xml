@@ -45,10 +45,10 @@
         <executions>
           <execution>
             <id>generate-allow-list-schema</id>
-            <phase>process-classes</phase>
             <goals>
               <goal>java</goal>
             </goals>
+            <phase>process-classes</phase>
             <configuration>
               <mainClass>org.mycore.waf.fact.AllowListSchemaGenerator</mainClass>
               <classpathScope>test</classpathScope>
