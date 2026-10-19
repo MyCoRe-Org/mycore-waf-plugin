@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suspicion-list xmlns="http://www.mycore.org/waf/suspicion">
+  <rule name="unknown">
+    <cookie name="foo" pattern=".*"/>
+  </rule>
+</suspicion-list>

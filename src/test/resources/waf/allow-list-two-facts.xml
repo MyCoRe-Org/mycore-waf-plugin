@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<allow-list xmlns="http://www.mycore.org/waf">
+  <rule>
+    <method value="GET"/>
+    <path pattern="/public"/>
+  </rule>
+</allow-list>
