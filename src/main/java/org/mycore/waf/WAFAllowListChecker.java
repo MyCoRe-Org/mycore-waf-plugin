@@ -10,6 +10,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -39,6 +41,9 @@ public class WAFAllowListChecker {
   private static final int DEFAULT_DNS_CACHE_CAPACITY = 1000;
   private static final int DEFAULT_DNS_CACHE_TTL_MINUTES = 60;
 
+  // Cached for IPs without a verified hostname, MCRCache does not accept null values
+  private static final String NO_VERIFIED_HOSTNAME = "";
+
   private final List<IPRange> allowedIPRanges;
   private final List<Pattern> allowedPathPatterns;
   private final List<Pattern> knownBotReverseDNSPatterns;
@@ -47,8 +52,13 @@ public class WAFAllowListChecker {
   private final List<String> allowedSubResourceDestinations;
   private final List<Pattern> allowedSubResourcePathPatterns;
 
-  // Cache for reverse DNS lookups (IP -> Hostname), bounded with TTL via MCRCache
+  // Cache for reverse DNS lookups (IP -> verified hostname or NO_VERIFIED_HOSTNAME), bounded with TTL via MCRCache
   private final MCRCache<String, String> reverseDNSCache;
+
+  private final long dnsCacheTTLMillis;
+
+  // Reverse DNS lookups currently in progress, so concurrent requests from one IP share a lookup
+  private final ConcurrentHashMap<String, CompletableFuture<String>> pendingDNSLookups = new ConcurrentHashMap<>();
 
   public WAFAllowListChecker() {
     this.allowedIPRanges = loadAllowedIPs();
@@ -60,6 +70,8 @@ public class WAFAllowListChecker {
     this.allowedSubResourcePathPatterns = loadPatterns(CONFIG_SUB_RESOURCE_PATHS, "sub resource path");
     int capacity = MCRConfiguration2.getInt(CONFIG_DNS_CACHE_CAPACITY).orElse(DEFAULT_DNS_CACHE_CAPACITY);
     this.reverseDNSCache = new MCRCache<>(capacity, "WAF Reverse DNS");
+    int ttlMinutes = MCRConfiguration2.getInt(CONFIG_DNS_CACHE_TTL_MINUTES).orElse(DEFAULT_DNS_CACHE_TTL_MINUTES);
+    this.dnsCacheTTLMillis = ttlMinutes * 60_000L;
   }
 
   private List<IPRange> loadAllowedIPs() {
@@ -253,32 +265,61 @@ public class WAFAllowListChecker {
     }
 
     String remoteIP = MCRFrontendUtil.getRemoteAddr(request);
-    int ttlMinutes = MCRConfiguration2.getInt(CONFIG_DNS_CACHE_TTL_MINUTES).orElse(DEFAULT_DNS_CACHE_TTL_MINUTES);
-    long ttlMs = (long) ttlMinutes * 60_000L;
+    String hostname = getVerifiedHostname(remoteIP);
+    if (hostname.isEmpty()) {
+      return false;
+    }
+    return matchesKnownBotReverseDNSPattern(hostname, remoteIP);
+  }
 
-    // Check cache: entry is valid if it was inserted within the TTL window
-    String cachedHostname = reverseDNSCache.getIfUpToDate(remoteIP, System.currentTimeMillis() - ttlMs);
+  /**
+   * Returns the verified reverse DNS hostname of the given IP, using the cache if possible.
+   * <p>
+   * Failed lookups are cached as well. Otherwise a client that fakes a known bot User-Agent would
+   * cause new DNS queries with every single request. Concurrent requests from the same IP share
+   * one lookup instead of querying the DNS server in parallel.
+   *
+   * @param ip the IP address to resolve
+   * @return the verified hostname, or an empty string if the IP has no verified hostname
+   */
+  String getVerifiedHostname(String ip) {
+    String cachedHostname = reverseDNSCache.getIfUpToDate(ip, System.currentTimeMillis() - dnsCacheTTLMillis);
     if (cachedHostname != null) {
-      return matchesKnownBotReverseDNSPattern(cachedHostname, remoteIP);
+      return cachedHostname;
     }
 
-    // Perform reverse DNS lookup
-    String hostname = performReverseDNSLookup(remoteIP);
+    CompletableFuture<String> lookup = new CompletableFuture<>();
+    CompletableFuture<String> runningLookup = pendingDNSLookups.putIfAbsent(ip, lookup);
+    if (runningLookup != null) {
+      return runningLookup.join();
+    }
+
+    try {
+      String hostname = lookupVerifiedHostname(ip);
+      reverseDNSCache.put(ip, hostname);
+      lookup.complete(hostname);
+      return hostname;
+    } catch (RuntimeException e) {
+      lookup.completeExceptionally(e);
+      throw e;
+    } finally {
+      pendingDNSLookups.remove(ip, lookup);
+    }
+  }
+
+  private String lookupVerifiedHostname(String ip) {
+    String hostname = performReverseDNSLookup(ip);
     if (hostname == null) {
-      LOGGER.debug("No reverse DNS found for IP: {}", remoteIP);
-      return false;
+      LOGGER.debug("No reverse DNS found for IP: {}", ip);
+      return NO_VERIFIED_HOSTNAME;
     }
 
     // Verify with forward DNS lookup if enabled
-    if (verifyReverseDNS && !verifyForwardDNS(hostname, remoteIP)) {
-      LOGGER.warn("Forward DNS verification failed for hostname: {} (IP: {})", hostname, remoteIP);
-      return false;
+    if (verifyReverseDNS && !verifyForwardDNS(hostname, ip)) {
+      LOGGER.warn("Forward DNS verification failed for hostname: {} (IP: {})", hostname, ip);
+      return NO_VERIFIED_HOSTNAME;
     }
-
-    // Cache the verified result
-    reverseDNSCache.put(remoteIP, hostname);
-
-    return matchesKnownBotReverseDNSPattern(hostname, remoteIP);
+    return hostname;
   }
 
   private boolean isKnownBotUserAgent(HttpServletRequest request) {
@@ -296,7 +337,7 @@ public class WAFAllowListChecker {
     return false;
   }
 
-  private String performReverseDNSLookup(String ip) {
+  String performReverseDNSLookup(String ip) {
     try {
       InetAddress addr = InetAddress.getByName(ip);
       String hostname = addr.getCanonicalHostName();
@@ -315,7 +356,7 @@ public class WAFAllowListChecker {
     }
   }
 
-  private boolean verifyForwardDNS(String hostname, String originalIP) {
+  boolean verifyForwardDNS(String hostname, String originalIP) {
     try {
       InetAddress[] addresses = InetAddress.getAllByName(hostname);
 
