@@ -25,4 +25,4 @@ jobs:
         env:
           SONATYPE_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           SONATYPE_TOKEN: ${{ secrets.OSSRH_TOKEN }}
-        run: mvn --batch-mode deploy
+        run: mvn --batch-mode deploy -Dmaven.repository.credentialScope=id

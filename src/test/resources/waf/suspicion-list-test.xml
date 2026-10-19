@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suspicion-list xmlns="http://www.mycore.org/waf/suspicion"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.mycore.org/waf/suspicion waf/suspicion-list.xsd">
+  <rule name="datacenter">
+    <remote-address cidr="203.0.113.0/24, 198.51.100.7"/>
+  </rule>
+  <rule name="search-from-english-only">
+    <and>
+      <redirect-url pattern="/servlets/solr/.*"/>
+      <value field="languages" pattern="en.*" match="all"/>
+    </and>
+  </rule>
+</suspicion-list>
