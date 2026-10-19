@@ -98,6 +98,10 @@ public class GeoIPDatabase {
         return name;
     }
 
+    public Path getFile() {
+        return file;
+    }
+
     /**
      * Checks if the database is downloaded from a URL.
      *

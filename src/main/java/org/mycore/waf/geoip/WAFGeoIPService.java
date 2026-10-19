@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -68,6 +69,8 @@ public class WAFGeoIPService implements GeoIPLookup {
 
     private final Map<String, GeoIPDatabase> databases;
 
+    private final Set<String> warnedDatabases = ConcurrentHashMap.newKeySet();
+
     private ScheduledExecutorService scheduler;
 
     private Duration updateInterval;
@@ -114,7 +117,14 @@ public class WAFGeoIPService implements GeoIPLookup {
         return service;
     }
 
-    private static List<GeoIPDatabase> loadConfiguration() {
+    /**
+     * Reads the databases from the configuration. Every name with a property
+     * {@code MCR.WAF.GeoIP.Database.<name>.*} is a database, databases without {@code File} are
+     * ignored.
+     *
+     * @return the configured databases, empty if there are none or the directory is not set
+     */
+    static List<GeoIPDatabase> loadConfiguration() {
         List<GeoIPDatabase> databases = new ArrayList<>();
         // Every name with a property MCR.WAF.GeoIP.Database.<name>.* is a database
         Set<String> databaseNames = MCRConfiguration2.getSubPropertiesMap(CONFIG_DATABASE_PREFIX).keySet().stream()
@@ -225,11 +235,32 @@ public class WAFGeoIPService implements GeoIPLookup {
     @Override
     public Map<String, Object> lookup(String database, String address) {
         GeoIPDatabase geoIPDatabase = databases.get(database);
-        if (geoIPDatabase == null || address == null) {
+        if (geoIPDatabase == null) {
+            warnOnce(database, "GeoIP database '{}' is used by a suspicion rule, but not configured. Rules using it "
+                + "never match. Set {}{}.File and {}{}.URL.", database, CONFIG_DATABASE_PREFIX, database,
+                CONFIG_DATABASE_PREFIX, database);
+            return null;
+        }
+        if (!geoIPDatabase.hasURL() && !geoIPDatabase.isAvailable()) {
+            warnOnce(database, "GeoIP database '{}' is used by a suspicion rule, but has no URL and no local file. "
+                + "Rules using it never match. Set {}{}.URL or place the file and restart.", database,
+                CONFIG_DATABASE_PREFIX, database);
+            return null;
+        }
+        if (address == null) {
             return null;
         }
         InetAddress inetAddress = parsePublicAddress(address);
         return inetAddress == null ? null : geoIPDatabase.lookup(inetAddress);
+    }
+
+    /**
+     * Logs a warning only once per database, the lookup runs for every solved challenge.
+     */
+    private void warnOnce(String database, String message, Object... parameters) {
+        if (warnedDatabases.add(database)) {
+            LOGGER.warn(message, parameters);
+        }
     }
 
     /**
