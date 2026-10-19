@@ -99,6 +99,15 @@ public class GeoIPDatabase {
     }
 
     /**
+     * Checks if the database is downloaded from a URL.
+     *
+     * @return true if a download URL is configured, false if only the local file is used
+     */
+    public boolean hasURL() {
+        return url != null;
+    }
+
+    /**
      * Checks if the database has been loaded.
      *
      * @return true if lookups are possible

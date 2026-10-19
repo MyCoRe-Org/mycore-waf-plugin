@@ -10,15 +10,17 @@ import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.mycore.common.config.MCRConfiguration2;
@@ -27,10 +29,10 @@ import org.mycore.common.events.MCRShutdownHandler;
 import org.mycore.waf.suspicion.GeoIPLookup;
 
 /**
- * Provides the GeoIP databases used by the suspicion rules. The databases listed in
- * {@code MCR.WAF.GeoIP.Databases} are loaded and kept up to date, independent of the suspicion
- * rules. The list is empty by default. They are configured in
- * {@code MCR.WAF.GeoIP.Database.<name>.*}, stored in
+ * Provides the GeoIP databases used by the suspicion rules, configured in
+ * {@code MCR.WAF.GeoIP.Database.<name>.*} independent of the suspicion rules. A database with a
+ * {@code URL} is downloaded and kept up to date, a database without URL is only read from its local
+ * file. No URL is configured by default, so nothing is downloaded. The files are stored in
  * {@code MCR.WAF.GeoIP.Directory} and updated in a background thread every
  * {@code MCR.WAF.GeoIP.UpdateIntervalHours} hours. While a database is not available, for example
  * because the first download failed, the update is retried every
@@ -46,7 +48,7 @@ public class WAFGeoIPService implements GeoIPLookup {
 
     private static final String CONFIG_PREFIX = "MCR.WAF.GeoIP.";
     private static final String CONFIG_DIRECTORY = CONFIG_PREFIX + "Directory";
-    private static final String CONFIG_DATABASES = CONFIG_PREFIX + "Databases";
+    private static final String CONFIG_DATABASE_PREFIX = CONFIG_PREFIX + "Database.";
     private static final String CONFIG_UPDATE_INTERVAL_HOURS = CONFIG_PREFIX + "UpdateIntervalHours";
     private static final String CONFIG_RETRY_INTERVAL_MINUTES = CONFIG_PREFIX + "RetryIntervalMinutes";
 
@@ -92,15 +94,17 @@ public class WAFGeoIPService implements GeoIPLookup {
     }
 
     /**
-     * Creates the service from the configuration and starts the background thread that loads and
-     * updates the databases listed in {@code MCR.WAF.GeoIP.Databases}.
+     * Creates the service from the configuration, loads the local database files and starts the
+     * background thread that downloads and updates the databases with a URL.
      *
      * @return the started service, or a service without databases if none are configured
      */
     public static WAFGeoIPService start() {
         List<GeoIPDatabase> databases = loadConfiguration();
         WAFGeoIPService service = new WAFGeoIPService(databases);
-        if (!databases.isEmpty()) {
+        // Databases without URL are only read from the local file, which is done once
+        databases.forEach(GeoIPDatabase::load);
+        if (databases.stream().anyMatch(GeoIPDatabase::hasURL)) {
             service.startUpdates(
                 Duration.ofHours(MCRConfiguration2.getInt(CONFIG_UPDATE_INTERVAL_HOURS)
                     .orElse(DEFAULT_UPDATE_INTERVAL_HOURS)),
@@ -112,15 +116,10 @@ public class WAFGeoIPService implements GeoIPLookup {
 
     private static List<GeoIPDatabase> loadConfiguration() {
         List<GeoIPDatabase> databases = new ArrayList<>();
-        List<String> databaseNames = MCRConfiguration2.getString(CONFIG_DATABASES).stream()
-            .flatMap(value -> Arrays.stream(value.split(",")))
-            .map(String::trim)
-            .filter(name -> !name.isEmpty())
-            .toList();
-        if (databaseNames.isEmpty()) {
-            LOGGER.info("GeoIP is disabled, {} is empty", CONFIG_DATABASES);
-            return databases;
-        }
+        // Every name with a property MCR.WAF.GeoIP.Database.<name>.* is a database
+        Set<String> databaseNames = MCRConfiguration2.getSubPropertiesMap(CONFIG_DATABASE_PREFIX).keySet().stream()
+            .map(key -> key.substring(0, key.indexOf('.') < 0 ? key.length() : key.indexOf('.')))
+            .collect(Collectors.toCollection(TreeSet::new));
         Optional<String> directory;
         try {
             directory = MCRConfiguration2.getString(CONFIG_DIRECTORY).filter(value -> !value.isBlank());
@@ -135,11 +134,10 @@ public class WAFGeoIPService implements GeoIPLookup {
         int intervalHours = MCRConfiguration2.getInt(CONFIG_UPDATE_INTERVAL_HOURS)
             .orElse(DEFAULT_UPDATE_INTERVAL_HOURS);
         for (String name : databaseNames) {
-            String prefix = CONFIG_PREFIX + "Database." + name + ".";
-            Optional<String> fileName = MCRConfiguration2.getString(prefix + "File");
+            String prefix = CONFIG_DATABASE_PREFIX + name + ".";
+            Optional<String> fileName = MCRConfiguration2.getString(prefix + "File").filter(value -> !value.isBlank());
             if (fileName.isEmpty()) {
-                LOGGER.error("GeoIP database '{}' is listed in {}, but {}File is not set", name, CONFIG_DATABASES,
-                    prefix);
+                LOGGER.error("GeoIP database '{}' has no {}File, ignoring it", name, prefix);
                 continue;
             }
             URI url = MCRConfiguration2.getString(prefix + "URL").filter(value -> !value.isBlank())
@@ -183,12 +181,17 @@ public class WAFGeoIPService implements GeoIPLookup {
      * be loaded yet, for example because the first download failed, the update interval otherwise.
      */
     Duration nextDelay() {
-        boolean allAvailable = databases.values().stream().allMatch(GeoIPDatabase::isAvailable);
+        boolean allAvailable = databases.values().stream()
+            .filter(GeoIPDatabase::hasURL)
+            .allMatch(GeoIPDatabase::isAvailable);
         return allAvailable ? updateInterval : retryInterval;
     }
 
     private void updateAll() {
         for (GeoIPDatabase database : databases.values()) {
+            if (!database.hasURL()) {
+                continue;
+            }
             try {
                 database.update(client);
             } catch (InterruptedException e) {

@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Suspicion rules of the WAF plugin based on the location and the network operator of the client
-  IP. The rules need the GeoIP databases "country" and "asn", which have to be enabled with
-  MCR.WAF.GeoIP.Databases=country,asn. Private addresses (local tests, VPN) and addresses missing
+  IP. The rules need the GeoIP databases "country" and "asn", whose download is enabled by setting
+  MCR.WAF.GeoIP.Database.<name>.URL, see mycore.properties. Private addresses (local tests, VPN) and addresses missing
   in the database never match, and while a database is not available the rules using it do not
   match either.
 -->

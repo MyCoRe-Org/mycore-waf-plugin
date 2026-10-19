@@ -86,7 +86,7 @@ public class DefaultWAFService implements WAFService {
     this.allowListChecker = new WAFAllowListChecker();
     this.allowRules = WAFAllowRules.load();
     this.suspicionRules = WAFSuspicionRules.load();
-    // Independent of the suspicion rules: the databases listed in MCR.WAF.GeoIP.Databases are loaded
+    // Independent of the suspicion rules: databases with MCR.WAF.GeoIP.Database.<name>.URL are downloaded
     this.geoIP = WAFGeoIPService.start();
     this.interactionValidator = new InteractionValidator(
         MCRConfiguration2.getInt(CONFIG_INTERACTION_MIN_DURATION).orElse(DEFAULT_INTERACTION_MIN_DURATION),

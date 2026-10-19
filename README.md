@@ -238,29 +238,30 @@ If a fact cannot be evaluated because data is missing, for example a GeoIP fact 
 The plugin ships two rule files:
 
 - `waf/default-suspicion-rules.xml`: rules on the browser fingerprint and the request headers (server CPUs, unusual screen resolutions, missing or faked timezone, Chinese timezone without Chinese language, User-Agent contradicting the platform or the HTTP header, desktop browser without plugins, very low device memory, missing `Accept-Language`). No GeoIP data is needed.
-- `waf/geoip-suspicion-rules.xml`: `outside-europe` (country not in the EU, the EEA, Switzerland, the United Kingdom, the micro states, the Western Balkans, Ukraine or Moldova) and `cloud-provider` (Amazon, Microsoft, Google Cloud, Oracle, Tencent, Alibaba, Huawei Cloud, DigitalOcean, Akamai/Linode and Vultr by AS number). These rules need the GeoIP databases, which are enabled separately with `MCR.WAF.GeoIP.Databases`. Without them the rules never match.
+- `waf/geoip-suspicion-rules.xml`: `outside-europe` (country not in the EU, the EEA, Switzerland, the United Kingdom, the micro states, the Western Balkans, Ukraine or Moldova) and `cloud-provider` (Amazon, Microsoft, Google Cloud, Oracle, Tencent, Alibaba, Huawei Cloud, DigitalOcean, Akamai/Linode and Vultr by AS number). These rules need the GeoIP databases, whose download is enabled separately by setting their URLs. Without them the rules never match.
 
 Own rule files are added to the list, for example `MCR.WAF.SuspicionRules=waf/default-suspicion-rules.xml,waf/my-suspicion-rules.xml`. A file in `<MyCoRe-Home>/resources/waf/` is on the classpath.
 
 #### Example configuration: checkbox for visitors outside of Europe
 
-The following configuration in the `mycore.properties` of the application enables both rule files. Visitors from Europe with a regular browser pass after the Proof of Work as before. Visitors whose IP is located outside of Europe or in a cloud data center, and clients with a suspicious fingerprint, additionally have to click the checkbox. They are not blocked. The first two lines are required: one enables the rules, the other the download of the GeoIP databases. All other properties show the defaults and can be omitted.
+The following configuration in the `mycore.properties` of the application enables both rule files. Visitors from Europe with a regular browser pass after the Proof of Work as before. Visitors whose IP is located outside of Europe or in a cloud data center, and clients with a suspicious fingerprint, additionally have to click the checkbox. They are not blocked. The rule line and the URL lines are required, the URLs enable the download of the GeoIP databases. The other properties show the defaults and can be omitted.
 
 ```properties
 # Enable the suspicion rules shipped with the plugin: fingerprint and GeoIP rules
 MCR.WAF.SuspicionRules=waf/default-suspicion-rules.xml,waf/geoip-suspicion-rules.xml
 
 # Download the GeoIP databases to the data directory and update them daily
-MCR.WAF.GeoIP.Databases=country,asn
+MCR.WAF.GeoIP.Database.country.URL=https://github.com/sapics/ip-location-db/releases/download/latest/user-country.mmdb
+MCR.WAF.GeoIP.Database.country.ChecksumURL=https://github.com/sapics/ip-location-db/releases/download/checksum/user-country.mmdb.sha256
+MCR.WAF.GeoIP.Database.asn.URL=https://github.com/sapics/ip-location-db/releases/download/latest/origin-asn.mmdb
+MCR.WAF.GeoIP.Database.asn.ChecksumURL=https://github.com/sapics/ip-location-db/releases/download/checksum/origin-asn.mmdb.sha256
+
+# Defaults
 MCR.WAF.GeoIP.Directory=%MCR.datadir%/waf/geoip
 MCR.WAF.GeoIP.UpdateIntervalHours=24
 MCR.WAF.GeoIP.RetryIntervalMinutes=15
 MCR.WAF.GeoIP.Database.country.File=user-country.mmdb
-MCR.WAF.GeoIP.Database.country.URL=https://github.com/sapics/ip-location-db/releases/download/latest/user-country.mmdb
-MCR.WAF.GeoIP.Database.country.ChecksumURL=https://github.com/sapics/ip-location-db/releases/download/checksum/user-country.mmdb.sha256
 MCR.WAF.GeoIP.Database.asn.File=origin-asn.mmdb
-MCR.WAF.GeoIP.Database.asn.URL=https://github.com/sapics/ip-location-db/releases/download/latest/origin-asn.mmdb
-MCR.WAF.GeoIP.Database.asn.ChecksumURL=https://github.com/sapics/ip-location-db/releases/download/checksum/origin-asn.mmdb.sha256
 
 # Interaction challenge
 MCR.WAF.Interaction.ExpiryMinutes=5
@@ -278,21 +279,20 @@ To change the list of European countries or to use only some of the rules, copy 
 
 ### GeoIP Databases
 
-The `country` and `asn` facts look up the client IP in GeoIP databases in the MaxMind DB (MMDB) format. By default the databases `user-country.mmdb` and `origin-asn.mmdb` of [ip-location-db](https://github.com/sapics/ip-location-db) are used. They are published under the Public Domain Dedication and License (PDDL) and can be used without attribution. GeoLite2 and DB-IP MMDB files work as well, both the flat (`country_code`) and the nested (`country.iso_code`) country layout are supported.
+The `country` and `asn` facts look up the client IP in GeoIP databases in the MaxMind DB (MMDB) format. The example configuration below uses `user-country.mmdb` and `origin-asn.mmdb` of [ip-location-db](https://github.com/sapics/ip-location-db). They are published under the Public Domain Dedication and License (PDDL) and can be used without attribution. GeoLite2 and DB-IP MMDB files work as well, both the flat (`country_code`) and the nested (`country.iso_code`) country layout are supported.
 
-The databases are stored in `MCR.WAF.GeoIP.Directory` and downloaded by a background thread at startup and every `MCR.WAF.GeoIP.UpdateIntervalHours` hours. With a checksum URL only the small SHA-256 file is fetched to check for changes, and every download is verified before it replaces the local file. A failed update keeps the previous database. Without URL only the local file is used, so a database can also be placed there manually, for example on servers without internet access (a proxy can be configured with the JVM properties `https.proxyHost` and `https.proxyPort`). The databases listed in `MCR.WAF.GeoIP.Databases` are downloaded, independent of the suspicion rules. The list is empty by default, so nothing is downloaded until it is configured. While a database is not available, for example because the first download failed, the update is retried every `MCR.WAF.GeoIP.RetryIntervalMinutes` minutes. Every download is aborted after 5 minutes.
+The databases are stored in `MCR.WAF.GeoIP.Directory` and downloaded by a background thread at startup and every `MCR.WAF.GeoIP.UpdateIntervalHours` hours. With a checksum URL only the small SHA-256 file is fetched to check for changes, and every download is verified before it replaces the local file. A failed update keeps the previous database. Without URL only the local file is used, so a database can also be placed there manually, for example on servers without internet access (a proxy can be configured with the JVM properties `https.proxyHost` and `https.proxyPort`). A database is downloaded if its `URL` is set, independent of the suspicion rules. No URL is set by default, so nothing is downloaded until it is configured. While a database is not available, for example because the first download failed, the update is retried every `MCR.WAF.GeoIP.RetryIntervalMinutes` minutes. Every download is aborted after 5 minutes.
 
 Private, loopback, link local, unique local (IPv6) and shared CGNAT addresses (`100.64.0.0/10`) are never looked up. GeoIP rules therefore never match local test systems or clients in a VPN with private addresses.
 
 | Property                                     | Default                              | Description                                                                                |
 |----------------------------------------------|--------------------------------------|--------------------------------------------------------------------------------------------|
-| `MCR.WAF.GeoIP.Databases`                    | _(empty)_                            | Comma separated names of the databases to download and load, for example `country,asn`. Empty: GeoIP is disabled. |
 | `MCR.WAF.GeoIP.Directory`                    | `%MCR.datadir%/waf/geoip`            | Directory of the database files.                                                           |
 | `MCR.WAF.GeoIP.UpdateIntervalHours`          | `24`                                 | Interval between two update checks.                                                       |
 | `MCR.WAF.GeoIP.RetryIntervalMinutes`         | `15`                                 | Interval between two attempts while a database is not available yet.                      |
-| `MCR.WAF.GeoIP.Database.<name>.File`         | `user-country.mmdb`, `origin-asn.mmdb` | File name in the directory. `<name>` is a name from `MCR.WAF.GeoIP.Databases`, predefined are `country` and `asn`. |
-| `MCR.WAF.GeoIP.Database.<name>.URL`          | ip-location-db release               | Download URL. Empty: only the local file is used.                                         |
-| `MCR.WAF.GeoIP.Database.<name>.ChecksumURL`  | ip-location-db checksum release      | URL of the SHA-256 checksum (`sha256sum` format). Empty: download when the file is older than the update interval. |
+| `MCR.WAF.GeoIP.Database.<name>.File`         | `user-country.mmdb`, `origin-asn.mmdb` | File name in the directory. Predefined are the databases `country` and `asn`.            |
+| `MCR.WAF.GeoIP.Database.<name>.URL`          | _(not set)_                          | Download URL, enables the download. Not set: only the local file is used, if it exists.   |
+| `MCR.WAF.GeoIP.Database.<name>.ChecksumURL`  | _(not set)_                          | URL of the SHA-256 checksum (`sha256sum` format). Not set: download when the file is older than the update interval. |
 
 ### Custom Templates
 

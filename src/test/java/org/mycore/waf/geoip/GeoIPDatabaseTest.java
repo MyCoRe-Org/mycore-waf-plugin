@@ -264,8 +264,12 @@ class GeoIPDatabaseTest {
     @Test
     void missingDatabaseIsRetriedSooner() throws Exception {
         Path file = directory.resolve("country.mmdb");
-        GeoIPDatabase database = new GeoIPDatabase("country", file, null, null, Duration.ofDays(1));
-        WAFGeoIPService service = new WAFGeoIPService(List.of(database), Duration.ofHours(24),
+        GeoIPDatabase database = new GeoIPDatabase("country", file, uri("/country.mmdb"), null,
+            Duration.ofDays(1));
+        // A database without URL is never downloaded, so it does not cause retries
+        GeoIPDatabase localOnly = new GeoIPDatabase("asn", directory.resolve("missing.mmdb"), null, null,
+            Duration.ofDays(1));
+        WAFGeoIPService service = new WAFGeoIPService(List.of(database, localOnly), Duration.ofHours(24),
             Duration.ofMinutes(15));
 
         assertEquals(Duration.ofMinutes(15), service.nextDelay());
