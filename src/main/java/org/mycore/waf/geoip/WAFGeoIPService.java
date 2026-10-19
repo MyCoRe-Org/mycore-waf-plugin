@@ -130,17 +130,12 @@ public class WAFGeoIPService implements GeoIPLookup {
         Set<String> databaseNames = MCRConfiguration2.getSubPropertiesMap(CONFIG_DATABASE_PREFIX).keySet().stream()
             .map(key -> key.substring(0, key.indexOf('.') < 0 ? key.length() : key.indexOf('.')))
             .collect(Collectors.toCollection(TreeSet::new));
-        Optional<String> directory;
-        try {
-            directory = MCRConfiguration2.getString(CONFIG_DIRECTORY).filter(value -> !value.isBlank());
-        } catch (MCRConfigurationException e) {
-            LOGGER.warn("GeoIP is disabled, {} cannot be resolved: {}", CONFIG_DIRECTORY, e.getMessage());
+        String disabledReason = getDisabledReason();
+        if (disabledReason != null) {
+            LOGGER.info("GeoIP is disabled: {}", disabledReason);
             return databases;
         }
-        if (directory.isEmpty()) {
-            LOGGER.info("GeoIP is disabled, {} is not set", CONFIG_DIRECTORY);
-            return databases;
-        }
+        String directory = MCRConfiguration2.getStringOrThrow(CONFIG_DIRECTORY);
         int intervalHours = MCRConfiguration2.getInt(CONFIG_UPDATE_INTERVAL_HOURS)
             .orElse(DEFAULT_UPDATE_INTERVAL_HOURS);
         for (String name : databaseNames) {
@@ -154,10 +149,26 @@ public class WAFGeoIPService implements GeoIPLookup {
                 .map(URI::create).orElse(null);
             URI checksumURL = MCRConfiguration2.getString(prefix + "ChecksumURL").filter(value -> !value.isBlank())
                 .map(URI::create).orElse(null);
-            databases.add(new GeoIPDatabase(name, Path.of(directory.get()).resolve(fileName.get()), url,
+            databases.add(new GeoIPDatabase(name, Path.of(directory).resolve(fileName.get()), url,
                 checksumURL, Duration.ofHours(intervalHours)));
         }
         return databases;
+    }
+
+    /**
+     * Checks the directory of the databases.
+     *
+     * @return why GeoIP is disabled, or null if the directory is configured
+     */
+    static String getDisabledReason() {
+        try {
+            if (MCRConfiguration2.getString(CONFIG_DIRECTORY).filter(value -> !value.isBlank()).isEmpty()) {
+                return CONFIG_DIRECTORY + " is empty";
+            }
+            return null;
+        } catch (MCRConfigurationException e) {
+            return CONFIG_DIRECTORY + " cannot be resolved: " + e.getMessage();
+        }
     }
 
     private void startUpdates(Duration updateInterval, Duration retryInterval) {
@@ -223,22 +234,20 @@ public class WAFGeoIPService implements GeoIPLookup {
         }
     }
 
-    /**
-     * Checks if any database is configured.
-     *
-     * @return true if at least one database is configured
-     */
-    public boolean hasDatabases() {
-        return !databases.isEmpty();
-    }
-
     @Override
     public Map<String, Object> lookup(String database, String address) {
         GeoIPDatabase geoIPDatabase = databases.get(database);
         if (geoIPDatabase == null) {
-            warnOnce(database, "GeoIP database '{}' is used by a suspicion rule, but not configured. Rules using it "
-                + "never match. Set {}{}.File and {}{}.URL.", database, CONFIG_DATABASE_PREFIX, database,
-                CONFIG_DATABASE_PREFIX, database);
+            // The reason is only determined for the first lookup of the database, it is logged once
+            String disabledReason = warnedDatabases.contains(database) ? null : getDisabledReason();
+            if (disabledReason != null) {
+                warnOnce(database, "GeoIP database '{}' is used by a suspicion rule, but GeoIP is disabled: {}. "
+                    + "Rules using it never match.", database, disabledReason);
+            } else {
+                warnOnce(database, "GeoIP database '{}' is used by a suspicion rule, but not configured. Rules using "
+                    + "it never match. Set {}{}.File and {}{}.URL.", database, CONFIG_DATABASE_PREFIX, database,
+                    CONFIG_DATABASE_PREFIX, database);
+            }
             return null;
         }
         if (!geoIPDatabase.hasURL() && !geoIPDatabase.isAvailable()) {

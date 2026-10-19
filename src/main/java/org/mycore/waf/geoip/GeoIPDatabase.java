@@ -98,6 +98,11 @@ public class GeoIPDatabase {
         return name;
     }
 
+    /**
+     * Returns the local file of the database.
+     *
+     * @return the file the database is read from and downloaded to
+     */
     public Path getFile() {
         return file;
     }
