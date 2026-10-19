@@ -39,6 +39,8 @@ public class WAFSuspicionRulesTest extends MCRTestCase {
 
     private WAFSuspicionRules defaultRules;
 
+    private WAFSuspicionRules geoIPRules;
+
     private String userAgentHeader;
 
     private String acceptLanguageHeader;
@@ -52,6 +54,9 @@ public class WAFSuspicionRulesTest extends MCRTestCase {
         SuspicionList defaultList = WAFSuspicionRules.loadSuspicionList("waf/default-suspicion-rules.xml");
         assertNotNull("default rules should be loadable from the classpath", defaultList);
         defaultRules = new WAFSuspicionRules(List.of(defaultList));
+        SuspicionList geoIPList = WAFSuspicionRules.loadSuspicionList("waf/geoip-suspicion-rules.xml");
+        assertNotNull("GeoIP rules should be loadable from the classpath", geoIPList);
+        geoIPRules = new WAFSuspicionRules(List.of(geoIPList));
         userAgentHeader = null;
         acceptLanguageHeader = "de-DE,de;q=0.9";
         remoteAddress = "192.0.2.10";
@@ -250,26 +255,26 @@ public class WAFSuspicionRulesTest extends MCRTestCase {
     @Test
     public void europeanResidentialAddressIsNotSuspicious() {
         geoIP("DE", 3320);
-        assertEquals(List.of(), evaluate(defaultRules, regularBrowser()));
+        assertEquals(List.of(), evaluate(geoIPRules, regularBrowser()));
     }
 
     @Test
     public void addressOutsideOfEuropeIsSuspicious() {
         geoIP("CN", 4134);
-        assertEquals(List.of("outside-europe"), evaluate(defaultRules, regularBrowser()));
+        assertEquals(List.of("outside-europe"), evaluate(geoIPRules, regularBrowser()));
     }
 
     @Test
     public void cloudProviderIsSuspicious() {
         geoIP("DE", 16509);
-        assertEquals(List.of("cloud-provider"), evaluate(defaultRules, regularBrowser()));
+        assertEquals(List.of("cloud-provider"), evaluate(geoIPRules, regularBrowser()));
     }
 
     @Test
     public void unknownAddressDoesNotMatchNegatedGeoIPRules() {
         // Database missing or private address: "not in Europe" must not match
         geoIP = GeoIPLookup.NONE;
-        assertEquals(List.of(), evaluate(defaultRules, regularBrowser()));
+        assertEquals(List.of(), evaluate(geoIPRules, regularBrowser()));
     }
 
     @Test
@@ -277,7 +282,7 @@ public class WAFSuspicionRulesTest extends MCRTestCase {
         geoIP = (database, address) -> "country".equals(database)
             ? Map.of("country", Map.of("iso_code", "US"))
             : null;
-        assertEquals(List.of("outside-europe"), evaluate(defaultRules, regularBrowser()));
+        assertEquals(List.of("outside-europe"), evaluate(geoIPRules, regularBrowser()));
     }
 
     @Test
@@ -306,7 +311,8 @@ public class WAFSuspicionRulesTest extends MCRTestCase {
 
     @Test
     public void referencedGeoIPDatabasesAreCollected() {
-        assertEquals(Set.of("asn", "country"), defaultRules.getGeoIPDatabases());
+        assertEquals(Set.of(), defaultRules.getGeoIPDatabases());
+        assertEquals(Set.of("asn", "country"), geoIPRules.getGeoIPDatabases());
         SuspicionList testList = WAFSuspicionRules.loadSuspicionList("waf/suspicion-list-test.xml");
         assertEquals(Set.of(), new WAFSuspicionRules(List.of(testList)).getGeoIPDatabases());
     }

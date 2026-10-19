@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Suspicion rules of the WAF plugin based on the location and the network operator of the client
+  IP. Using this file downloads the GeoIP databases "country" and "asn", see MCR.WAF.GeoIP.* in
+  mycore.properties. Private addresses (local tests, VPN) and addresses missing in the database
+  never match, and while a database is not available the rules using it do not match either.
+-->
+<suspicion-list xmlns="http://www.mycore.org/waf/suspicion"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.mycore.org/waf/suspicion waf/suspicion-list.xsd">
+
+  <!--
+    Client IP outside of Europe, according to the GeoIP database "country". The list contains the
+    EU, the EEA, Switzerland, the United Kingdom, the European micro states and dependencies, the
+    Western Balkans, Ukraine and Moldova. Russia, Belarus and Turkey are deliberately not included.
+    Private addresses (local tests, VPN) and addresses missing in the database never match.
+  -->
+  <rule name="outside-europe">
+    <not>
+      <country code="AT|BE|BG|HR|CY|CZ|DK|EE|FI|FR|DE|GR|HU|IE|IT|LV|LT|LU|MT|NL|PL|PT|RO|SK|SI|ES|SE|IS|LI|NO|CH|GB|AD|MC|SM|VA|GI|IM|JE|GG|FO|AX|AL|BA|ME|MK|RS|XK|UA|MD"/>
+    </not>
+  </rule>
+
+  <!--
+    Client IP in a cloud data center, according to the GeoIP database "asn". Real visitors rarely
+    browse from there. Europe based hosters (Hetzner, OVH, ...) are not included, because many VPN
+    services run their servers there.
+  -->
+  <rule name="cloud-provider">
+    <!-- Amazon: 16509, 14618 / Microsoft: 8075 / Google Cloud: 396982 / Oracle: 31898 /
+         Tencent: 45090, 132203 / Alibaba: 37963, 45102 / Huawei Cloud: 136907, 55990 /
+         DigitalOcean: 14061 / Akamai (Linode): 63949 / Vultr: 20473 -->
+    <asn number="16509|14618|8075|396982|31898|45090|132203|37963|45102|136907|55990|14061|63949|20473"/>
+  </rule>
+
+</suspicion-list>

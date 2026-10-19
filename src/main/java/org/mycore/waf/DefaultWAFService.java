@@ -12,7 +12,6 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
@@ -37,6 +36,8 @@ public class DefaultWAFService implements WAFService {
   public static final String STAGE_CLAIM = "stage";
   public static final String BOX_X_CLAIM = "box_x";
   public static final String BOX_Y_CLAIM = "box_y";
+  // Issue time in milliseconds, the standard iat claim only has second precision
+  public static final String ISSUED_MILLIS_CLAIM = "issued_ms";
   public static final String STAGE_INTERACTION = "interaction";
   public static final String WAF_PASSED_COOKIE_NAME = "WAF-PASSED";
 
@@ -218,6 +219,19 @@ public class DefaultWAFService implements WAFService {
   private static String getClaimString(DecodedJWT jwt, String name, String defaultValue) {
     String value = jwt.getClaim(name).asString();
     return value == null ? defaultValue : value;
+  }
+
+  /**
+   * Returns the time since the interaction token was issued, measured on the server because the
+   * timestamps in the recorded events are controlled by the client.
+   *
+   * @param jwt the interaction token
+   * @param now the current time
+   * @return the elapsed milliseconds, or -1 if the token has no issue time
+   */
+  static long getMillisSinceIssue(DecodedJWT jwt, Instant now) {
+    Long issued = jwt.getClaim(ISSUED_MILLIS_CLAIM).asLong();
+    return issued == null ? -1 : Math.max(0, now.toEpochMilli() - issued);
   }
 
   /**
@@ -559,7 +573,7 @@ public class DefaultWAFService implements WAFService {
         .withClaim(REDIRECT_URL_CLAIM, redirectURL)
         .withClaim(ATTEMPT_CLAIM, attempt)
         .withClaim(IP_CLAIM, MCRFrontendUtil.getRemoteAddr(request))
-        .withIssuedAt(Date.from(Instant.now()))
+        .withClaim(ISSUED_MILLIS_CLAIM, Instant.now().toEpochMilli())
         .withExpiresAt(Date.from(Instant.now().plus(expiryMinutes, ChronoUnit.MINUTES)))
         .sign(MCRJWTUtil.getJWTAlgorithm());
 
@@ -569,6 +583,7 @@ public class DefaultWAFService implements WAFService {
     config.addProperty("boxY", boxY);
     config.addProperty("boxSize", InteractionValidator.BOX_SIZE);
     config.addProperty("margin", InteractionValidator.MARGIN);
+    config.addProperty("minCanvasSize", InteractionValidator.MIN_CANVAS_SIZE);
 
     response.setContentType("text/html;charset=UTF-8");
     response.setHeader("Cache-Control", "no-store");
@@ -596,11 +611,10 @@ public class DefaultWAFService implements WAFService {
     }
     int boxX = getClaimInt(jwt, BOX_X_CLAIM, -1);
     int boxY = getClaimInt(jwt, BOX_Y_CLAIM, -1);
-    if (boxX < 0 || boxY < 0 || jwt.getIssuedAtAsInstant() == null) {
+    long elapsedMillis = getMillisSinceIssue(jwt, Instant.now());
+    if (boxX < 0 || boxY < 0 || elapsedMillis < 0) {
       return List.of("incomplete interaction token");
     }
-    // Measured on the server, the timestamps in the recorded events are controlled by the client
-    long elapsedMillis = Duration.between(jwt.getIssuedAtAsInstant(), Instant.now()).toMillis();
     return interactionValidator.validate(request.getParameter(INTERACTION_EVENTS_PARAMETER), boxX, boxY,
         elapsedMillis);
   }

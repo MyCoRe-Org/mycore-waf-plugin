@@ -38,7 +38,8 @@ public class WAFTemplateService {
 
   // Texts that are drawn on the canvas of the interaction challenge, passed to the script as JSON
   private static final List<String> INTERACTION_TEXT_KEYS = List.of("waf.interaction.heading",
-      "waf.interaction.description", "waf.interaction.label", "waf.interaction.verifying");
+      "waf.interaction.description", "waf.interaction.label", "waf.interaction.verifying",
+      "waf.interaction.toosmall");
 
   private static final Pattern PLACEHOLDER_PATTERN = Pattern.compile("\\{\\{([^}]+)\\}\\}");
 

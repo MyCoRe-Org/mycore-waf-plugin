@@ -185,7 +185,7 @@ Some bots run real browsers and solve the Proof of Work challenge. Their fingerp
 
 The feature is **disabled by default** (`MCR.WAF.SuspicionRules` is empty). The canvas checkbox cannot be operated with a keyboard or a screen reader, so every installation has to decide whether this is acceptable for its users. See [Example configuration](#example-configuration-checkbox-for-visitors-outside-of-europe) below.
 
-The page records the events that lead to the click (pointer moves, pointer down/up, click, touch, key, focus and visibility events, each with timestamp, coordinates and `isTrusted`). The server accepts the interaction only if a trusted click (or, on touch devices, a pointerup) hits the checkbox on a canvas of at least 240 x 240 pixels, at least `MCR.WAF.Interaction.MinDurationMillis` passed both according to the client and measured on the server, and a mouse click was preceded by at least `MCR.WAF.Interaction.MinPointerMoves` pointer moves. Untrusted events that are not part of the click, for example dispatched by browser extensions, are ignored. A failed interaction counts as a failed attempt and leads back to the Proof of Work challenge, an expired interaction token keeps the originally requested URL.
+The page records the events that lead to the click (pointer moves, pointer down/up, click, touch, key, focus and visibility events, each with timestamp, coordinates and `isTrusted`). The server accepts the interaction only if a trusted click (or, on touch devices, a pointerup) hits the checkbox on a canvas of at least 240 x 240 pixels (smaller windows show a hint instead of the checkbox), at least `MCR.WAF.Interaction.MinDurationMillis` passed both according to the client and measured on the server, and a mouse click was preceded by at least `MCR.WAF.Interaction.MinPointerMoves` pointer moves. Untrusted events that are not part of the click, for example dispatched by browser extensions, are ignored. A failed interaction counts as a failed attempt and leads back to the Proof of Work challenge, an expired interaction token keeps the originally requested URL.
 
 The recorded events are reported by the client. A bot that reads the checkbox position from the page can forge them with a single request. The interaction challenge therefore raises the cost for bots and collects data about them, it cannot prove human input.
 
@@ -235,17 +235,20 @@ The client information fields are `userAgent`, `language`, `languages`, `platfor
 
 If a fact cannot be evaluated because data is missing, for example a GeoIP fact for a private IP address or while the database has not been downloaded yet, the whole rule does not match, even if the fact is wrapped in `not`. All children of `and` and `or` are evaluated, so the result does not depend on their order.
 
-The default rules contain `outside-europe` (country not in the EU, the EEA, Switzerland, the United Kingdom, the micro states, the Western Balkans, Ukraine or Moldova) and `cloud-provider` (Amazon, Microsoft, Google Cloud, Oracle, Tencent, Alibaba, Huawei Cloud, DigitalOcean, Akamai/Linode and Vultr by AS number).
+The plugin ships two rule files:
+
+- `waf/default-suspicion-rules.xml`: rules on the browser fingerprint and the request headers (server CPUs, unusual screen resolutions, missing or faked timezone, Chinese timezone without Chinese language, User-Agent contradicting the platform or the HTTP header, desktop browser without plugins, very low device memory, missing `Accept-Language`). No GeoIP data is needed.
+- `waf/geoip-suspicion-rules.xml`: `outside-europe` (country not in the EU, the EEA, Switzerland, the United Kingdom, the micro states, the Western Balkans, Ukraine or Moldova) and `cloud-provider` (Amazon, Microsoft, Google Cloud, Oracle, Tencent, Alibaba, Huawei Cloud, DigitalOcean, Akamai/Linode and Vultr by AS number). Only this file makes the plugin download the GeoIP databases.
 
 Own rule files are added to the list, for example `MCR.WAF.SuspicionRules=waf/default-suspicion-rules.xml,waf/my-suspicion-rules.xml`. A file in `<MyCoRe-Home>/resources/waf/` is on the classpath.
 
 #### Example configuration: checkbox for visitors outside of Europe
 
-The following configuration in the `mycore.properties` of the application enables the default rules. Visitors from Europe with a regular browser pass after the Proof of Work as before. Visitors whose IP is located outside of Europe or in a cloud data center, and clients with a suspicious fingerprint, additionally have to click the checkbox. They are not blocked. The GeoIP databases are downloaded automatically, all GeoIP properties except the first line show the defaults and can be omitted.
+The following configuration in the `mycore.properties` of the application enables both rule files. Visitors from Europe with a regular browser pass after the Proof of Work as before. Visitors whose IP is located outside of Europe or in a cloud data center, and clients with a suspicious fingerprint, additionally have to click the checkbox. They are not blocked. The GeoIP databases are downloaded automatically because `waf/geoip-suspicion-rules.xml` is listed. All other properties show the defaults and can be omitted. Without the second file, only the fingerprint rules are active and nothing is downloaded.
 
 ```properties
-# Enable the suspicion rules shipped with the plugin
-MCR.WAF.SuspicionRules=waf/default-suspicion-rules.xml
+# Enable the suspicion rules shipped with the plugin: fingerprint and GeoIP rules
+MCR.WAF.SuspicionRules=waf/default-suspicion-rules.xml,waf/geoip-suspicion-rules.xml
 
 # GeoIP databases, downloaded to the data directory and updated daily
 MCR.WAF.GeoIP.Directory=%MCR.datadir%/waf/geoip
@@ -270,7 +273,7 @@ To log the recorded events of the interaction challenge, enable debug logging in
 <Logger name="org.mycore.waf.WAFFilter" level="debug"/>
 ```
 
-To change the list of European countries or to use only some of the default rules, copy `waf/default-suspicion-rules.xml` from the JAR to `<MyCoRe-Home>/resources/waf/my-suspicion-rules.xml`, edit it and set `MCR.WAF.SuspicionRules=waf/my-suspicion-rules.xml`.
+To change the list of European countries or to use only some of the rules, copy the rule file from the JAR to `<MyCoRe-Home>/resources/waf/my-suspicion-rules.xml`, edit it and list it in `MCR.WAF.SuspicionRules` instead of the original.
 
 ### GeoIP Databases
 

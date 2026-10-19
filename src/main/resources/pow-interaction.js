@@ -40,6 +40,11 @@
         return Math.max(config.margin, Math.min(position, extent - config.boxSize - config.margin));
     }
 
+    // Must match InteractionValidator.MIN_CANVAS_SIZE, smaller canvases are rejected by the server
+    function isTooSmall() {
+        return width < config.minCanvasSize || height < config.minCanvasSize;
+    }
+
     function box() {
         return {
             x: boxPosition(config.boxX, width),
@@ -116,7 +121,7 @@
         ctx.closePath();
     }
 
-    function drawCard() {
+    function drawCard(description) {
         const cardWidth = Math.min(440, width - 2 * config.margin);
         const padding = 24;
         const textWidth = cardWidth - 2 * padding;
@@ -124,7 +129,7 @@
         ctx.font = 'bold 22px ' + FONT;
         const headingLines = wrapText(config.i18n.heading, textWidth);
         ctx.font = '16px ' + FONT;
-        const descriptionLines = wrapText(config.i18n.description, textWidth);
+        const descriptionLines = wrapText(description, textWidth);
 
         const cardHeight = 2 * padding + headingLines.length * 28 + 12 + descriptionLines.length * 22;
         const cardX = (width - cardWidth) / 2;
@@ -195,7 +200,11 @@
     function draw() {
         ctx.fillStyle = '#e8e9eb';
         ctx.fillRect(0, 0, width, height);
-        drawCard();
+        if (isTooSmall()) {
+            drawCard(config.i18n.toosmall);
+            return;
+        }
+        drawCard(config.i18n.description);
         drawCheckbox();
     }
 
@@ -243,7 +252,7 @@
             lastMove = now;
             record(event);
         }
-        const onBox = isOnBox(event.clientX, event.clientY);
+        const onBox = !isTooSmall() && isOnBox(event.clientX, event.clientY);
         if (onBox !== hover) {
             hover = onBox;
             canvas.style.cursor = hover ? 'pointer' : 'default';
@@ -266,7 +275,7 @@
     });
 
     function activate(event) {
-        if (checked || !isOnBox(event.clientX, event.clientY)) {
+        if (checked || isTooSmall() || !isOnBox(event.clientX, event.clientY)) {
             return;
         }
         checked = true;
