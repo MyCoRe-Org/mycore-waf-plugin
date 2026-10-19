@@ -4,6 +4,7 @@ import com.auth0.jwt.JWT;
 import com.auth0.jwt.exceptions.JWTVerificationException;
 import com.auth0.jwt.interfaces.Claim;
 import com.auth0.jwt.interfaces.DecodedJWT;
+import com.google.gson.JsonObject;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -14,11 +15,14 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import org.mycore.common.config.MCRConfiguration2;
 import org.mycore.frontend.MCRFrontendUtil;
 import org.mycore.frontend.jersey.MCRJWTUtil;
+import org.mycore.waf.geoip.WAFGeoIPService;
+import org.mycore.waf.suspicion.GeoIPLookup;
 
 public class DefaultWAFService implements WAFService {
 
@@ -28,6 +32,10 @@ public class DefaultWAFService implements WAFService {
   public static final String DIFFICULTY_CLAIM = "difficulty";
   public static final String REDIRECT_URL_CLAIM = "redirect_url";
   public static final String ATTEMPT_CLAIM = "attempt";
+  public static final String STAGE_CLAIM = "stage";
+  public static final String BOX_X_CLAIM = "box_x";
+  public static final String BOX_Y_CLAIM = "box_y";
+  public static final String STAGE_INTERACTION = "interaction";
   public static final String WAF_PASSED_COOKIE_NAME = "WAF-PASSED";
 
   public static final String POW_SOLUTION_PARAMETER = "pow_solution";
@@ -35,6 +43,8 @@ public class DefaultWAFService implements WAFService {
   public static final String POW_CHALLENGE_TOKEN_PARAMETER = "pow_challenge_token";
   public static final String REDIRECT_URL_PARAMETER = "redirect_url";
   public static final String ATTEMPT_PARAMETER = "attempt";
+  public static final String INTERACTION_TOKEN_PARAMETER = "interaction_token";
+  public static final String INTERACTION_EVENTS_PARAMETER = "interaction_events";
 
   public static final String POW_CHALLENGE_HTML = "pow-challenge.html";
   public static final String POW_CHALLENGE_FAIL_HTML = "pow-challenge-fail.html";
@@ -44,15 +54,24 @@ public class DefaultWAFService implements WAFService {
   private static final String CONFIG_MAX_ATTEMPTS = "MCR.WAF.MaxAttempts";
   private static final String CONFIG_CHALLENGE_EXPIRY_MINUTES = "MCR.WAF.ChallengeExpiryMinutes";
   private static final String CONFIG_PASSED_TOKEN_EXPIRY_MINUTES = "MCR.WAF.PassedTokenExpiryMinutes";
+  private static final String CONFIG_INTERACTION_EXPIRY_MINUTES = "MCR.WAF.Interaction.ExpiryMinutes";
+  private static final String CONFIG_INTERACTION_MIN_DURATION = "MCR.WAF.Interaction.MinDurationMillis";
+  private static final String CONFIG_INTERACTION_MIN_POINTER_MOVES = "MCR.WAF.Interaction.MinPointerMoves";
 
   private static final int DEFAULT_DIFFICULTY = 16;
   private static final int DEFAULT_MAX_ATTEMPTS = 3;
   private static final int DEFAULT_CHALLENGE_EXPIRY_MINUTES = 2;
   private static final int DEFAULT_PASSED_TOKEN_EXPIRY_MINUTES = 1440; // 1 day
+  private static final int DEFAULT_INTERACTION_EXPIRY_MINUTES = 5;
+  private static final int DEFAULT_INTERACTION_MIN_DURATION = 600;
+  private static final int DEFAULT_INTERACTION_MIN_POINTER_MOVES = 3;
 
   // Services
   private final WAFAllowListChecker allowListChecker;
   private final WAFAllowRules allowRules;
+  private final WAFSuspicionRules suspicionRules;
+  private final GeoIPLookup geoIP;
+  private final InteractionValidator interactionValidator;
   private final BotDetectionService botDetectionService;
   private final ProofOfWorkValidator powValidator;
   private final SecureRandom secureRandom;
@@ -61,6 +80,13 @@ public class DefaultWAFService implements WAFService {
   public DefaultWAFService() {
     this.allowListChecker = new WAFAllowListChecker();
     this.allowRules = WAFAllowRules.load();
+    this.suspicionRules = WAFSuspicionRules.load();
+    // The GeoIP databases are only needed (and downloaded) if suspicion rules are configured
+    this.geoIP = suspicionRules.isEmpty() ? GeoIPLookup.NONE : WAFGeoIPService.start();
+    this.interactionValidator = new InteractionValidator(
+        MCRConfiguration2.getInt(CONFIG_INTERACTION_MIN_DURATION).orElse(DEFAULT_INTERACTION_MIN_DURATION),
+        MCRConfiguration2.getInt(CONFIG_INTERACTION_MIN_POINTER_MOVES)
+            .orElse(DEFAULT_INTERACTION_MIN_POINTER_MOVES));
     this.botDetectionService = new BotDetectionService();
     this.powValidator = new ProofOfWorkValidator();
     this.secureRandom = new SecureRandom();
@@ -115,7 +141,8 @@ public class DefaultWAFService implements WAFService {
 
     // check if the token is a valid pow passed token
     Claim wafPassedClaim = jwt.getClaim(WAF_PASSED_CLAIM);
-    return wafPassedClaim != null && wafPassedClaim.asBoolean();
+    // Other tokens signed with the same key (challenge, interaction) have no waf_passed claim
+    return Boolean.TRUE.equals(wafPassedClaim.asBoolean());
   }
 
   @Override
@@ -388,8 +415,8 @@ public class DefaultWAFService implements WAFService {
   @Override
   public void redirectAfterChallenge(HttpServletRequest request, HttpServletResponse response)
       throws IOException {
-    // Extract redirect URL from the challenge token
-    String challengeToken = request.getParameter(POW_CHALLENGE_TOKEN_PARAMETER);
+    // Extract redirect URL from the challenge or interaction token
+    String challengeToken = getFlowToken(request);
     if (challengeToken == null || challengeToken.isEmpty()) {
       // Fallback to root if no token
       response.sendRedirect(joinPaths(MCRFrontendUtil.getBaseURL(request), "/"));
@@ -413,8 +440,8 @@ public class DefaultWAFService implements WAFService {
   @Override
   public void redirectAfterFailedAttempt(HttpServletRequest request, HttpServletResponse response)
       throws IOException {
-    // Extract attempt and redirect URL from the challenge token
-    String challengeToken = request.getParameter(POW_CHALLENGE_TOKEN_PARAMETER);
+    // Extract attempt and redirect URL from the challenge or interaction token
+    String challengeToken = getFlowToken(request);
     if (challengeToken == null || challengeToken.isEmpty()) {
       // Fallback to challenge page with attempt 1
       redirectToChallengeWithAttempt(request, response, 1);
@@ -470,6 +497,100 @@ public class DefaultWAFService implements WAFService {
   @Override
   public boolean isRuleAllowed(HttpServletRequest request) {
     return allowRules.isAllowed(request);
+  }
+
+  /**
+   * Returns the token that carries the redirect URL and the attempt counter of the current
+   * challenge flow: the interaction token if an interaction challenge is submitted, the Proof of
+   * Work challenge token otherwise.
+   */
+  private static String getFlowToken(HttpServletRequest request) {
+    String interactionToken = request.getParameter(INTERACTION_TOKEN_PARAMETER);
+    if (interactionToken != null && !interactionToken.isEmpty()) {
+      return interactionToken;
+    }
+    return request.getParameter(POW_CHALLENGE_TOKEN_PARAMETER);
+  }
+
+  @Override
+  public List<String> findSuspicionReasons(HttpServletRequest request) {
+    DecodedJWT jwt = getChallengeTokenDecoded(request, request.getParameter(POW_CHALLENGE_TOKEN_PARAMETER));
+    String redirectURL = jwt == null || jwt.getClaim(REDIRECT_URL_CLAIM).isNull()
+        ? null
+        : jwt.getClaim(REDIRECT_URL_CLAIM).asString();
+    return suspicionRules.findMatchingRules(request, request.getParameter(CLIENT_INFORMATION_PARAMETER),
+        MCRFrontendUtil.getRemoteAddr(request), redirectURL, geoIP);
+  }
+
+  @Override
+  public void generateInteractionChallenge(HttpServletRequest request, HttpServletResponse response)
+      throws IOException {
+    DecodedJWT challengeJWT = getChallengeTokenDecoded(request,
+        request.getParameter(POW_CHALLENGE_TOKEN_PARAMETER));
+    String redirectURL = "/";
+    int attempt = 0;
+    if (challengeJWT != null) {
+      Claim redirectClaim = challengeJWT.getClaim(REDIRECT_URL_CLAIM);
+      redirectURL = redirectClaim.isNull() ? "/" : redirectClaim.asString();
+      Claim attemptClaim = challengeJWT.getClaim(ATTEMPT_CLAIM);
+      attempt = attemptClaim.isNull() ? 0 : attemptClaim.asInt();
+    }
+
+    // Random checkbox position in per mille of the canvas size. The vertical position avoids the
+    // middle of the page, where the explanation is drawn.
+    int boxX = 50 + secureRandom.nextInt(801);
+    int boxY = secureRandom.nextBoolean() ? 60 + secureRandom.nextInt(161) : 720 + secureRandom.nextInt(181);
+
+    int expiryMinutes = MCRConfiguration2.getInt(CONFIG_INTERACTION_EXPIRY_MINUTES)
+        .orElse(DEFAULT_INTERACTION_EXPIRY_MINUTES);
+    String token = JWT.create()
+        .withClaim(STAGE_CLAIM, STAGE_INTERACTION)
+        .withClaim(BOX_X_CLAIM, boxX)
+        .withClaim(BOX_Y_CLAIM, boxY)
+        .withClaim(REDIRECT_URL_CLAIM, redirectURL)
+        .withClaim(ATTEMPT_CLAIM, attempt)
+        .withClaim(IP_CLAIM, MCRFrontendUtil.getRemoteAddr(request))
+        .withExpiresAt(Date.from(Instant.now().plus(expiryMinutes, ChronoUnit.MINUTES)))
+        .sign(MCRJWTUtil.getJWTAlgorithm());
+
+    JsonObject config = new JsonObject();
+    config.addProperty("token", token);
+    config.addProperty("boxX", boxX);
+    config.addProperty("boxY", boxY);
+    config.addProperty("boxSize", InteractionValidator.BOX_SIZE);
+    config.addProperty("margin", InteractionValidator.MARGIN);
+
+    response.setContentType("text/html;charset=UTF-8");
+    response.setHeader("Cache-Control", "no-store");
+    response.getWriter().write(templateService.renderInteraction(request.getLocale(), config));
+  }
+
+  @Override
+  public boolean hasInteraction(HttpServletRequest request) {
+    String token = request.getParameter(INTERACTION_TOKEN_PARAMETER);
+    String events = request.getParameter(INTERACTION_EVENTS_PARAMETER);
+    return token != null && !token.isEmpty() && events != null && !events.isEmpty();
+  }
+
+  @Override
+  public List<String> checkInteraction(HttpServletRequest request) {
+    DecodedJWT jwt = getChallengeTokenDecoded(request, request.getParameter(INTERACTION_TOKEN_PARAMETER));
+    if (jwt == null) {
+      return List.of("invalid or expired interaction token");
+    }
+    if (!STAGE_INTERACTION.equals(jwt.getClaim(STAGE_CLAIM).asString())) {
+      return List.of("token is not an interaction token");
+    }
+    Claim ipClaim = jwt.getClaim(IP_CLAIM);
+    if (ipClaim.isNull() || !MCRFrontendUtil.getRemoteAddr(request).equals(ipClaim.asString())) {
+      return List.of("interaction token was issued for another IP");
+    }
+    Integer boxX = jwt.getClaim(BOX_X_CLAIM).asInt();
+    Integer boxY = jwt.getClaim(BOX_Y_CLAIM).asInt();
+    if (boxX == null || boxY == null) {
+      return List.of("interaction token without checkbox position");
+    }
+    return interactionValidator.validate(request.getParameter(INTERACTION_EVENTS_PARAMETER), boxX, boxY);
   }
 
 }

@@ -9,8 +9,9 @@ A Web Application Firewall (WAF) plugin for [MyCoRe](https://www.mycore.de/) app
 3. For the reverse DNS check, the User-Agent is inspected first. Only if it matches a known bot pattern (e.g. `Googlebot`, `bingbot`) is the expensive DNS lookup performed and the resolved hostname verified.
 4. If no allow list matches, the client is redirected to the PoW challenge page.
 5. The browser solves the SHA-256 PoW challenge in JavaScript and submits the solution.
-6. The server validates the solution and, if correct, sets the `WAF-PASSED` cookie. The client is then redirected to the originally requested URL.
-7. After too many failed attempts the client is shown a failure page.
+6. The server validates the solution and checks the submitted browser fingerprint against the suspicion rules. If no rule matches, it sets the `WAF-PASSED` cookie and redirects the client to the originally requested URL.
+7. If a suspicion rule matches, the client has to click a checkbox that is drawn on a canvas at a random position (interaction challenge). The recorded events are validated by the server before the cookie is set.
+8. After too many failed attempts the client is shown a failure page.
 
 ```
 Request
@@ -21,7 +22,9 @@ Request
   ├─ Allowed browser sub resource?       ──yes──> pass through
   ├─ Valid WAF-PASSED cookie?            ──yes──> pass through
   ├─ Known bot UA + reverse DNS match?   ──yes──> pass through
-  ├─ Challenge solution submitted?       ──yes──> validate → set cookie → redirect to original URL
+  ├─ Interaction result submitted?       ──yes──> validate events → set cookie → redirect to original URL
+  ├─ Challenge solution submitted?       ──yes──> validate → suspicious? ──yes──> serve interaction challenge
+  │                                                             └──no───> set cookie → redirect to original URL
   ├─ Challenge page requested?           ──yes──> serve PoW challenge page
   └─ (anything else)                     ──────> redirect to challenge page
 ```
@@ -29,6 +32,7 @@ Request
 ## Installation
 
 Add the JAR to the lib directory of your MyCoRe application. 
+The JAR is self contained: the only library that MyCoRe does not provide, the [MaxMind DB Reader](https://github.com/maxmind/MaxMind-DB-Reader-java) (Apache License 2.0), is included and relocated to `org.mycore.waf.shaded` by the Maven Shade Plugin, so it cannot conflict with another version on the classpath. All other dependencies are `provided`.
 The plugin registers itself automatically via `MCR.Startup.Class` — no additional `web.xml` changes required.
 
 
@@ -175,6 +179,83 @@ Reverse DNS lookups are expensive. Results are cached in a bounded `MCRCache`. F
 | `MCR.WAF.ChallengeExpiryMinutes`   | `2`     | How long a generated challenge token is valid.                                                                                                                      |
 | `MCR.WAF.PassedTokenExpiryMinutes` | `1440`  | How long the `WAF-PASSED` cookie is valid (1 day). After expiry the client must solve the challenge again.                                                          |
 
+### Suspicion Rules and Interaction Challenge
+
+Some bots run real browsers and solve the Proof of Work challenge. Their fingerprints often still give them away, for example a server CPU with 192 cores, a screen resolution of `1280x1024`, a Chinese timezone combined with only English languages, or a Windows User-Agent on a Linux platform. After a valid solution the fingerprint is checked against XML suspicion rules. If any rule matches, the client gets no `WAF-PASSED` cookie yet. Instead it has to click a checkbox that is drawn on a canvas at a random position, so it cannot be found in the DOM.
+
+The page records the events that lead to the click (pointer moves, pointer down/up, click, touch, key, focus and visibility events, each with timestamp, coordinates and `isTrusted`). The server accepts the interaction only if a trusted click hits the checkbox, it happened at least `MCR.WAF.Interaction.MinDurationMillis` after the page was shown, and a mouse click was preceded by at least `MCR.WAF.Interaction.MinPointerMoves` pointer moves. A failed interaction counts as a failed attempt and leads back to the Proof of Work challenge.
+
+The outcome is logged at `INFO` together with the matching rule names. The complete recorded events are logged at `DEBUG` by `org.mycore.waf.WAFFilter`, so that bots that learn to pass the interaction challenge can be analyzed.
+
+| Property                               | Default                             | Description                                                                                                  |
+|----------------------------------------|-------------------------------------|--------------------------------------------------------------------------------------------------------------|
+| `MCR.WAF.SuspicionRules`               | `waf/default-suspicion-rules.xml`   | Comma separated list of classpath resources with suspicion rule files. An empty value disables the feature. |
+| `MCR.WAF.Interaction.ExpiryMinutes`    | `5`                                 | How long the interaction token (and thus the checkbox) is valid.                                             |
+| `MCR.WAF.Interaction.MinDurationMillis`| `600`                               | Minimal time between showing the checkbox and the click.                                                    |
+| `MCR.WAF.Interaction.MinPointerMoves`  | `3`                                 | Minimal number of pointer moves before a mouse click. Touch and pen input is exempt.                        |
+
+A suspicion rule file is validated against `waf/suspicion-list.xsd`, which is generated from the JAXB model and packaged in the JAR. Every `rule` needs a `name`, which is logged as the reason, and contains exactly one fact:
+
+| Element                    | Attributes                         | Matches if                                                                                                                                 |
+|----------------------------|------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------|
+| `and`, `or`, `not`         |                                    | all, any or none of the contained facts match                                                                                              |
+| `value`                    | `field`, `pattern`, `match`        | the regex matches the whole value of a client information field. Array fields like `languages` match if any element matches (`match="all"`: every element) |
+| `missing`                  | `field`                            | the field is missing, `null`, an empty string or an empty array                                                                            |
+| `number`                   | `field`, `min`, `max`              | the numeric field lies in the inclusive range                                                                                              |
+| `count`                    | `field`, `min`, `max`              | the number of array elements lies in the inclusive range                                                                                   |
+| `header`                   | `name`, `pattern`, `match`         | the regex matches a header of the solution request (missing header never matches)                                                          |
+| `same-as-header`           | `field`, `header`                  | the field equals the header, for example `userAgent` and `User-Agent`                                                                      |
+| `timezone-offset-mismatch` |                                    | `timezone` is no known IANA timezone or does not fit `timezoneOffset` at `timestamp`                                                       |
+| `remote-address`           | `cidr`, `pattern`                  | the client IP lies in one of the comma separated CIDR ranges and/or matches the regex                                                      |
+| `country`                  | `code`, `database`                 | the regex matches the ISO country code of the client IP, see [GeoIP Databases](#geoip-databases)                                          |
+| `asn`                      | `number`, `organization`, `database` | the regexes match the number and/or the organization of the autonomous system (network operator) of the client IP                       |
+| `redirect-url`             | `pattern`, `match`                 | the regex matches the originally requested URL (relative to the base URL, with query string)                                              |
+
+The client information fields are `userAgent`, `language`, `languages`, `platform`, `hardwareConcurrency`, `deviceMemory`, `screenResolution`, `colorDepth`, `timezone`, `timezoneOffset`, `plugins`, `webdriver`, `headless`, `cookieEnabled`, `doNotTrack`, `touchSupport` and `timestamp`.
+
+```xml
+<suspicion-list xmlns="http://www.mycore.org/waf/suspicion">
+  <rule name="chinese-timezone-without-chinese-language">
+    <and>
+      <value field="timezone" pattern="Asia/(Shanghai|Chongqing|Harbin|Urumqi)"/>
+      <not>
+        <value field="languages" pattern="zh.*"/>
+      </not>
+    </and>
+  </rule>
+  <rule name="cloud-provider">
+    <remote-address cidr="47.74.0.0/15, 8.208.0.0/12"/>
+  </rule>
+</suspicion-list>
+```
+
+If a fact cannot be evaluated because data is missing, for example a GeoIP fact for a private IP address or while the database has not been downloaded yet, the whole rule does not match, even if the fact is wrapped in `not`.
+
+The default rules contain `outside-europe` (country not in the EU, the EEA, Switzerland, the United Kingdom, the micro states, the Western Balkans, Ukraine or Moldova) and `cloud-provider` (Amazon, Microsoft, Google Cloud, Oracle, Tencent, Alibaba, Huawei Cloud, DigitalOcean, Akamai/Linode and Vultr by AS number).
+
+To keep the default rules and add your own, extend the property:
+
+```properties
+MCR.WAF.SuspicionRules=%MCR.WAF.SuspicionRules%,waf/my-suspicion-rules.xml
+```
+
+### GeoIP Databases
+
+The `country` and `asn` facts look up the client IP in GeoIP databases in the MaxMind DB (MMDB) format. By default the databases `user-country.mmdb` and `origin-asn.mmdb` of [ip-location-db](https://github.com/sapics/ip-location-db) are used. They are published under the Public Domain Dedication and License (PDDL) and can be used without attribution. GeoLite2 and DB-IP MMDB files work as well, both the flat (`country_code`) and the nested (`country.iso_code`) country layout are supported.
+
+The databases are stored in `MCR.WAF.GeoIP.Directory` and downloaded by a background thread at startup and every `MCR.WAF.GeoIP.UpdateIntervalHours` hours. With a checksum URL only the small SHA-256 file is fetched to check for changes, and every download is verified before it replaces the local file. A failed update keeps the previous database. Without URL only the local file is used, so a database can also be placed there manually, for example on servers without internet access (a proxy can be configured with the JVM properties `https.proxyHost` and `https.proxyPort`). The databases are only downloaded if suspicion rules are configured.
+
+Private, loopback, link local, unique local (IPv6) and shared CGNAT addresses (`100.64.0.0/10`) are never looked up. GeoIP rules therefore never match local test systems or clients in a VPN with private addresses.
+
+| Property                                     | Default                              | Description                                                                                |
+|----------------------------------------------|--------------------------------------|--------------------------------------------------------------------------------------------|
+| `MCR.WAF.GeoIP.Directory`                    | `%MCR.datadir%/waf/geoip`            | Directory of the database files. An empty value disables GeoIP.                            |
+| `MCR.WAF.GeoIP.UpdateIntervalHours`          | `24`                                 | Interval between two update checks.                                                       |
+| `MCR.WAF.GeoIP.Databases`                    | `country,asn`                        | Names of the databases, referenced by the `database` attribute of the facts.              |
+| `MCR.WAF.GeoIP.Database.<name>.File`         | `user-country.mmdb`, `origin-asn.mmdb` | File name in the directory.                                                             |
+| `MCR.WAF.GeoIP.Database.<name>.URL`          | ip-location-db release               | Download URL. Empty: only the local file is used.                                         |
+| `MCR.WAF.GeoIP.Database.<name>.ChecksumURL`  | ip-location-db checksum release      | URL of the SHA-256 checksum (`sha256sum` format). Empty: download when the file is older than the update interval. |
+
 ### Custom Templates
 
 The challenge and failure pages can be replaced with custom HTML/JS files on the classpath.
@@ -184,6 +265,8 @@ The challenge and failure pages can be replaced with custom HTML/JS files on the
 | `MCR.WAF.ChallengeHtml`     | `pow-challenge.html`      | Classpath path to the challenge page template.                     |
 | `MCR.WAF.ChallengeFailHtml` | `pow-challenge-fail.html` | Classpath path to the failure page template.                       |
 | `MCR.WAF.ChallengeScript`   | `pow-challenge.js`        | Classpath path to the JavaScript embedded into the challenge page. |
+| `MCR.WAF.InteractionHtml`   | `pow-interaction.html`    | Classpath path to the interaction challenge page template.         |
+| `MCR.WAF.InteractionScript` | `pow-interaction.js`      | Classpath path to the JavaScript of the interaction challenge.     |
 
 Templates use `{{key}}` placeholders. Keys are resolved first from explicitly passed values (e.g. `pow_challenge_token`), then from the MyCoRe i18n system (`MCRTranslation`). The built-in templates support English and German.
 
@@ -194,6 +277,7 @@ Templates use `{{key}}` placeholders. Keys are resolved first from explicitly pa
 - **Proof of Work:** The nonce submitted by the client is validated server-side using SHA-256. The difficulty is embedded in the signed token and cannot be tampered with by the client.
 - **Reverse DNS spoofing:** When `MCR.WAF.VerifyReverseDNS=true` (the default), the plugin performs a forward DNS lookup to confirm that the resolved hostname actually points back to the original IP, preventing DNS spoofing attacks. Additionally, the DNS lookup is only triggered when the User-Agent already identifies the request as a known bot — arbitrary requests never incur a DNS lookup.
 - **Sub resource bypass:** The `Sec-Fetch-Dest` header comes from the client and can be forged, so it is never sufficient on its own. A request also has to be unmapped (static file) or match `MCR.WAF.SubResource.AllowedPaths`. Note that a request to a non-existing path is unmapped as well, so 404 responses are reachable without solving a challenge.
+- **Interaction challenge:** The interaction token is a signed JWT bound to the client IP that carries the checkbox position, so the client cannot move the checkbox. The checkbox only exists on a canvas. Synthetic events created by scripts have `isTrusted=false` and are rejected. Bots that control the browser via the DevTools protocol produce trusted events, which is why the events are logged for later analysis. The canvas checkbox cannot be operated with a keyboard or a screen reader, so it is only shown to clients that match a suspicion rule.
 - **Bot detection:** In addition to the PoW check, the plugin inspects the browser fingerprint submitted with the solution (User-Agent, WebDriver flag, screen resolution, language list, etc.) to reject obvious bots even if they manage to solve the hash challenge.
 
 ## License

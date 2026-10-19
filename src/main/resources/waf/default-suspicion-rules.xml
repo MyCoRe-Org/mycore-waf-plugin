@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Default suspicion rules of the WAF plugin. A client that solved the Proof of Work challenge and
+  matches any of these rules has to click a checkbox drawn on a canvas before it gets access.
+  The rules were derived from fingerprints of bots that solved the Proof of Work challenge.
+  Each rule name is logged as the reason why a client was considered suspicious.
+-->
+<suspicion-list xmlns="http://www.mycore.org/waf/suspicion"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.mycore.org/waf/suspicion waf/suspicion-list.xsd">
+
+  <!-- Server CPUs: even workstations rarely have more than 128 logical cores -->
+  <rule name="excessive-hardware-concurrency">
+    <number field="hardwareConcurrency" min="129"/>
+  </rule>
+
+  <!-- Default window sizes of headless browsers and virtual machines, rare on real screens today -->
+  <rule name="unusual-screen-resolution">
+    <value field="screenResolution" pattern="1280x1024|1024x768|800x600|640x480"/>
+  </rule>
+
+  <!-- Real browsers report the timezone of the operating system, servers often run in UTC -->
+  <rule name="missing-timezone">
+    <or>
+      <missing field="timezone"/>
+      <value field="timezone" pattern="UTC|GMT|Etc/.*"/>
+    </or>
+  </rule>
+
+  <!-- Timezone and offset come from the same OS setting, a mismatch indicates a faked timezone -->
+  <rule name="timezone-offset-mismatch">
+    <timezone-offset-mismatch/>
+  </rule>
+
+  <!-- Chinese timezone, but no Chinese among the preferred languages -->
+  <rule name="chinese-timezone-without-chinese-language">
+    <and>
+      <value field="timezone" pattern="Asia/(Shanghai|Chongqing|Chungking|Harbin|Urumqi|Kashgar)|PRC"/>
+      <not>
+        <value field="languages" pattern="zh.*"/>
+      </not>
+    </and>
+  </rule>
+
+  <!-- The User-Agent claims an operating system that navigator.platform contradicts -->
+  <rule name="user-agent-platform-mismatch">
+    <or>
+      <and>
+        <value field="userAgent" pattern=".*Windows NT.*"/>
+        <not>
+          <value field="platform" pattern="Win.*"/>
+        </not>
+      </and>
+      <and>
+        <value field="userAgent" pattern=".*\((iPhone|iPad|iPod);.*"/>
+        <not>
+          <value field="platform" pattern="iPhone|iPad|iPod|MacIntel"/>
+        </not>
+      </and>
+      <and>
+        <value field="userAgent" pattern=".*\(Macintosh;.*"/>
+        <not>
+          <value field="platform" pattern="Mac.*"/>
+        </not>
+      </and>
+      <and>
+        <value field="userAgent" pattern=".*(X11; Linux|Android).*"/>
+        <not>
+          <value field="platform" pattern="Linux.*"/>
+        </not>
+      </and>
+    </or>
+  </rule>
+
+  <!-- The User-Agent seen by JavaScript differs from the one sent in the HTTP header -->
+  <rule name="user-agent-header-mismatch">
+    <not>
+      <same-as-header field="userAgent" header="User-Agent"/>
+    </not>
+  </rule>
+
+  <!-- Current desktop browsers always list the built in PDF viewer as plugin -->
+  <rule name="desktop-browser-without-plugins">
+    <and>
+      <not>
+        <value field="userAgent" pattern=".*(Mobile|Android|iPhone|iPad|iPod).*"/>
+      </not>
+      <count field="plugins" max="0"/>
+    </and>
+  </rule>
+
+  <!-- Only devices with less than 1 GiB of memory report such a low value -->
+  <rule name="low-device-memory">
+    <number field="deviceMemory" max="0.5"/>
+  </rule>
+
+  <!-- Real browsers always send Accept-Language -->
+  <rule name="missing-accept-language">
+    <not>
+      <header name="Accept-Language" pattern=".+"/>
+    </not>
+  </rule>
+
+  <!--
+    Client IP outside of Europe, according to the GeoIP database "country". The list contains the
+    EU, the EEA, Switzerland, the United Kingdom, the European micro states and dependencies, the
+    Western Balkans, Ukraine and Moldova. Russia, Belarus and Turkey are deliberately not included.
+    Private addresses (local tests, VPN) and addresses missing in the database never match.
+  -->
+  <rule name="outside-europe">
+    <not>
+      <country code="AT|BE|BG|HR|CY|CZ|DK|EE|FI|FR|DE|GR|HU|IE|IT|LV|LT|LU|MT|NL|PL|PT|RO|SK|SI|ES|SE|IS|LI|NO|CH|GB|AD|MC|SM|VA|GI|IM|JE|GG|FO|AX|AL|BA|ME|MK|RS|XK|UA|MD"/>
+    </not>
+  </rule>
+
+  <!--
+    Client IP in a cloud data center, according to the GeoIP database "asn". Real visitors rarely
+    browse from there. Europe based hosters (Hetzner, OVH, ...) are not included, because many VPN
+    services run their servers there.
+  -->
+  <rule name="cloud-provider">
+    <!-- Amazon: 16509, 14618 / Microsoft: 8075 / Google Cloud: 396982 / Oracle: 31898 /
+         Tencent: 45090, 132203 / Alibaba: 37963, 45102 / Huawei Cloud: 136907, 55990 /
+         DigitalOcean: 14061 / Akamai (Linode): 63949 / Vultr: 20473 -->
+    <asn number="16509|14618|8075|396982|31898|45090|132203|37963|45102|136907|55990|14061|63949|20473"/>
+  </rule>
+
+</suspicion-list>

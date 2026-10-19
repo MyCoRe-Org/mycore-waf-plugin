@@ -3,6 +3,7 @@ package org.mycore.waf;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.List;
 
 public interface WAFService {
 
@@ -126,6 +127,51 @@ public interface WAFService {
      */
     default boolean isRuleAllowed(HttpServletRequest request) {
         return false;
+    }
+
+    /**
+     * Evaluates the configured suspicion rules against the client information of a valid challenge
+     * solution. A suspicious client has to solve the interaction challenge before it gets the
+     * WAF-PASSED cookie.
+     *
+     * @param request the challenge solution request, its solution has already been validated.
+     * @return the names of the matching suspicion rules, empty if the client is not suspicious.
+     */
+    default List<String> findSuspicionReasons(HttpServletRequest request) {
+        return List.of();
+    }
+
+    /**
+     * Renders the interaction challenge page, which asks a suspicious client to click a checkbox
+     * that is drawn on a canvas at a random position.
+     *
+     * @param request the challenge solution request, its solution has already been validated.
+     * @param response the outgoing HTTP response.
+     * @throws IOException if an I/O error occurs.
+     */
+    default void generateInteractionChallenge(HttpServletRequest request, HttpServletResponse response)
+        throws IOException {
+        throw new UnsupportedOperationException("Interaction challenge is not supported");
+    }
+
+    /**
+     * Checks if the request submits the result of an interaction challenge.
+     *
+     * @param request the incoming HTTP request.
+     * @return true if the request contains an interaction token and recorded events.
+     */
+    default boolean hasInteraction(HttpServletRequest request) {
+        return false;
+    }
+
+    /**
+     * Validates the result of an interaction challenge.
+     *
+     * @param request the incoming HTTP request.
+     * @return the problems found, empty if the interaction is valid.
+     */
+    default List<String> checkInteraction(HttpServletRequest request) {
+        return List.of("interaction challenge is not supported");
     }
 
 }

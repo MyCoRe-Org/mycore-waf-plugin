@@ -1,9 +1,12 @@
 package org.mycore.waf;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -24,16 +27,29 @@ public class WAFTemplateService {
   private static final String CONFIG_CHALLENGE_HTML = "MCR.WAF.ChallengeHtml";
   private static final String CONFIG_CHALLENGE_FAIL_HTML = "MCR.WAF.ChallengeFailHtml";
   private static final String CONFIG_CHALLENGE_SCRIPT = "MCR.WAF.ChallengeScript";
+  private static final String CONFIG_INTERACTION_HTML = "MCR.WAF.InteractionHtml";
+  private static final String CONFIG_INTERACTION_SCRIPT = "MCR.WAF.InteractionScript";
 
   private static final String DEFAULT_CHALLENGE_HTML = "pow-challenge.html";
   private static final String DEFAULT_CHALLENGE_FAIL_HTML = "pow-challenge-fail.html";
   private static final String DEFAULT_CHALLENGE_SCRIPT = "pow-challenge.js";
+  private static final String DEFAULT_INTERACTION_HTML = "pow-interaction.html";
+  private static final String DEFAULT_INTERACTION_SCRIPT = "pow-interaction.js";
+
+  // Texts that are drawn on the canvas of the interaction challenge, passed to the script as JSON
+  private static final List<String> INTERACTION_TEXT_KEYS = List.of("waf.interaction.heading",
+      "waf.interaction.description", "waf.interaction.label", "waf.interaction.verifying");
 
   private static final Pattern PLACEHOLDER_PATTERN = Pattern.compile("\\{\\{([^}]+)\\}\\}");
 
   private final String challengeHtml;
   private final String challengeFailHtml;
   private final String challengeScript;
+  private final String interactionHtml;
+  private final String interactionScript;
+
+  // HTML escaping is enabled by default, so the JSON can be embedded in a script element safely
+  private final Gson gson = new Gson();
 
   public WAFTemplateService() {
     String challengePath = MCRConfiguration2.getString(CONFIG_CHALLENGE_HTML)
@@ -45,6 +61,10 @@ public class WAFTemplateService {
     this.challengeHtml = loadHtml(challengePath);
     this.challengeFailHtml = loadHtml(challengeFailPath);
     this.challengeScript = loadHtml(challengeScriptPath);
+    this.interactionHtml = loadHtml(MCRConfiguration2.getString(CONFIG_INTERACTION_HTML)
+        .orElse(DEFAULT_INTERACTION_HTML));
+    this.interactionScript = loadHtml(MCRConfiguration2.getString(CONFIG_INTERACTION_SCRIPT)
+        .orElse(DEFAULT_INTERACTION_SCRIPT));
 
     // initialize MCRTranslation once
     new MCRTransactionableRunnable(new Runnable() {
@@ -70,6 +90,31 @@ public class WAFTemplateService {
     htmlValues.put("lang", locale.getLanguage());
     htmlValues.put("pow_challenge_script", renderedScript);
     return render(challengeHtml, locale, htmlValues);
+  }
+
+  /**
+   * Renders the interaction challenge page for the given locale. The configuration is passed to
+   * the script as JSON via the {{interaction_config}} placeholder, extended by an {@code i18n}
+   * object with the texts drawn on the canvas.
+   *
+   * @param locale the locale to use for translations
+   * @param config the configuration of the interaction challenge (token, checkbox position, ...)
+   * @return the rendered HTML string
+   */
+  public String renderInteraction(Locale locale, JsonObject config) {
+    JsonObject texts = new JsonObject();
+    for (String key : INTERACTION_TEXT_KEYS) {
+      texts.addProperty(key.substring(key.lastIndexOf('.') + 1), translate(key, locale));
+    }
+    JsonObject scriptConfig = config.deepCopy();
+    scriptConfig.add("i18n", texts);
+    String renderedScript = render(interactionScript, locale,
+        Map.of("interaction_config", gson.toJson(scriptConfig)));
+
+    Map<String, String> htmlValues = new HashMap<>();
+    htmlValues.put("lang", locale.getLanguage());
+    htmlValues.put("interaction_script", renderedScript);
+    return render(interactionHtml, locale, htmlValues);
   }
 
   /**

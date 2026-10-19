@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.List;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -19,6 +20,9 @@ public class WAFFilter extends HttpFilter {
 
   // Limits client controlled values in the log, the client information of a browser is far shorter
   private static final int MAX_LOGGED_VALUE_LENGTH = 2000;
+
+  // The recorded interaction events are logged completely, the challenge page limits their number
+  private static final int MAX_LOGGED_EVENTS_LENGTH = 200_000;
 
   @Override
   public void init() throws ServletException {
@@ -94,11 +98,22 @@ public class WAFFilter extends HttpFilter {
       return true;
     }
 
+    if (wafService.isChallengeSolutionRequest(req) && wafService.hasInteraction(req)) {
+      return handleInteraction(req, res);
+    }
+
     if (wafService.isChallengeSolutionRequest(req) && wafService.hasSolution(req)) {
       LOGGER.debug(
           "{} Valid WAF challenge solution received. Validating solution.",
           ipInfo);
       if (wafService.isValidSolution(req)) {
+        List<String> suspicionReasons = wafService.findSuspicionReasons(req);
+        if (!suspicionReasons.isEmpty()) {
+          logChallengeResult(req, Level.INFO, "solved, but the client is suspicious " + suspicionReasons
+              + ", showing interaction challenge");
+          wafService.generateInteractionChallenge(req, res);
+          return false;
+        }
         LOGGER.debug("{} WAF challenge solution is valid. Creating WAF-PASSED cookie and redirecting to original URL.", ipInfo);
         logChallengeResult(req, Level.DEBUG, "solved");
         wafService.createWAFPassedCookie(req, res);
@@ -123,6 +138,31 @@ public class WAFFilter extends HttpFilter {
         "{} No valid WAF-PASSED cookie or challenge solution found. Redirecting to challenge page.",
         ipInfo);
     wafService.redirectToChallenge(req, res);
+    return false;
+  }
+
+  /**
+   * Validates the result of the interaction challenge that is shown to suspicious clients. The
+   * recorded events are written to the debug log, so that the behavior of bots that pass the
+   * interaction challenge can be analyzed later.
+   */
+  private boolean handleInteraction(HttpServletRequest req, HttpServletResponse res) throws IOException {
+    String remoteAddress = MCRFrontendUtil.getRemoteAddr(req);
+    if (LOGGER.isDebugEnabled()) {
+      LOGGER.debug("{} WAF interaction events: {}", remoteAddress,
+          sanitizeForLog(req.getParameter(DefaultWAFService.INTERACTION_EVENTS_PARAMETER), MAX_LOGGED_EVENTS_LENGTH));
+    }
+    List<String> problems = wafService.checkInteraction(req);
+    String userAgent = sanitizeForLog(req.getHeader("User-Agent"));
+    if (problems.isEmpty()) {
+      LOGGER.info("{} WAF interaction challenge solved. User-Agent: {}", remoteAddress, userAgent);
+      wafService.createWAFPassedCookie(req, res);
+      wafService.redirectAfterChallenge(req, res);
+    } else {
+      LOGGER.info("{} WAF interaction challenge rejected {}. User-Agent: {}", remoteAddress,
+          sanitizeForLog(problems.toString()), userAgent);
+      wafService.redirectAfterFailedAttempt(req, res);
+    }
     return false;
   }
 
@@ -154,12 +194,23 @@ public class WAFFilter extends HttpFilter {
    * @return the sanitized value, or "-" if the value is null
    */
   static String sanitizeForLog(String value) {
+    return sanitizeForLog(value, MAX_LOGGED_VALUE_LENGTH);
+  }
+
+  /**
+   * Prepares a client controlled value for the log, see {@link #sanitizeForLog(String)}.
+   *
+   * @param value the value to sanitize, may be null
+   * @param maxLength the maximal length of the logged value
+   * @return the sanitized value, or "-" if the value is null
+   */
+  static String sanitizeForLog(String value, int maxLength) {
     if (value == null) {
       return "-";
     }
     String sanitized = value.replaceAll("\\p{Cntrl}", "?");
-    if (sanitized.length() > MAX_LOGGED_VALUE_LENGTH) {
-      return sanitized.substring(0, MAX_LOGGED_VALUE_LENGTH) + "...";
+    if (sanitized.length() > maxLength) {
+      return sanitized.substring(0, maxLength) + "...";
     }
     return sanitized;
   }
