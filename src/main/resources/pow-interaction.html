@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="{{lang}}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{waf.interaction.page.title}}</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #e8e9eb;
+    }
+    canvas {
+      position: fixed;
+      inset: 0;
+      display: block;
+      touch-action: manipulation;
+      cursor: pointer;
+    }
+    noscript {
+      display: block;
+      padding: 2rem;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: #333;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <noscript>{{waf.interaction.noscript}}</noscript>
+  <canvas id="interaction"></canvas>
+  <script>{{interaction_script}}</script>
+</body>
+</html>

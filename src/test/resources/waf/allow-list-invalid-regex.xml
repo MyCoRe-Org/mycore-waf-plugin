@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<allow-list xmlns="http://www.mycore.org/waf">
+  <rule>
+    <not>
+      <user-agent pattern="[invalid"/>
+    </not>
+  </rule>
+</allow-list>

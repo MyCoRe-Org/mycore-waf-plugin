@@ -29,7 +29,7 @@ jobs:
       - name: Change Versions
         run: mvn versions:set -DnewVersion=${{ github.ref_name }}-SNAPSHOT
       - name: Publish to sonatype-central with Apache Maven
-        run: mvn --batch-mode deploy
+        run: mvn --batch-mode deploy -Dmaven.repository.credentialScope=id
         env:
           SONATYPE_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           SONATYPE_TOKEN: ${{ secrets.OSSRH_TOKEN }}
