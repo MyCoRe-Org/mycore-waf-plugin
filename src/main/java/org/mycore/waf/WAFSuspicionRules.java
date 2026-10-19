@@ -6,8 +6,6 @@ import com.google.gson.JsonParseException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
-import java.util.TreeSet;
 import org.mycore.common.config.MCRConfiguration2;
 import org.mycore.waf.suspicion.ClientInformation;
 import org.mycore.waf.suspicion.GeoIPLookup;
@@ -66,17 +64,6 @@ public class WAFSuspicionRules {
      */
     public boolean isEmpty() {
         return suspicionLists.isEmpty();
-    }
-
-    /**
-     * Returns the names of the GeoIP databases the loaded rules look up.
-     *
-     * @return the database names, empty if no rule uses a GeoIP fact
-     */
-    public Set<String> getGeoIPDatabases() {
-        Set<String> databases = new TreeSet<>();
-        suspicionLists.forEach(list -> databases.addAll(list.getGeoIPDatabases()));
-        return databases;
     }
 
     /**

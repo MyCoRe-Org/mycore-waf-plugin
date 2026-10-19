@@ -4,7 +4,6 @@ import jakarta.xml.bind.annotation.XmlAccessType;
 import jakarta.xml.bind.annotation.XmlAccessorType;
 import jakarta.xml.bind.annotation.XmlAttribute;
 import java.util.Map;
-import java.util.Set;
 import java.util.regex.Pattern;
 import org.mycore.waf.WAFRegex;
 
@@ -28,11 +27,6 @@ public abstract class GeoIPFact extends ClientFact {
 
     private String getDatabaseName() {
         return database == null ? getDefaultDatabase() : database;
-    }
-
-    @Override
-    void collectGeoIPDatabases(Set<String> databases) {
-        databases.add(getDatabaseName());
     }
 
     /**

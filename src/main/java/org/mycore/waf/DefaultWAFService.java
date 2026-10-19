@@ -18,7 +18,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import org.mycore.common.config.MCRConfiguration2;
 import org.mycore.frontend.MCRFrontendUtil;
 import org.mycore.frontend.jersey.MCRJWTUtil;
@@ -87,9 +86,8 @@ public class DefaultWAFService implements WAFService {
     this.allowListChecker = new WAFAllowListChecker();
     this.allowRules = WAFAllowRules.load();
     this.suspicionRules = WAFSuspicionRules.load();
-    // Only the GeoIP databases referenced by the loaded suspicion rules are downloaded
-    Set<String> geoIPDatabases = suspicionRules.getGeoIPDatabases();
-    this.geoIP = geoIPDatabases.isEmpty() ? GeoIPLookup.NONE : WAFGeoIPService.start(geoIPDatabases);
+    // Independent of the suspicion rules: the databases listed in MCR.WAF.GeoIP.Databases are loaded
+    this.geoIP = WAFGeoIPService.start();
     this.interactionValidator = new InteractionValidator(
         MCRConfiguration2.getInt(CONFIG_INTERACTION_MIN_DURATION).orElse(DEFAULT_INTERACTION_MIN_DURATION),
         MCRConfiguration2.getInt(CONFIG_INTERACTION_MIN_POINTER_MOVES)

@@ -13,7 +13,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import org.junit.Before;
 import org.junit.Test;
 import org.mycore.common.MCRTestCase;
@@ -307,14 +306,6 @@ public class WAFSuspicionRulesTest extends MCRTestCase {
         geoIP("CN", 4134);
         assertEquals(List.of("or-value-first", "or-country-first", "not-and"),
             find(rules, info.toString(), "192.0.2.10", "/"));
-    }
-
-    @Test
-    public void referencedGeoIPDatabasesAreCollected() {
-        assertEquals(Set.of(), defaultRules.getGeoIPDatabases());
-        assertEquals(Set.of("asn", "country"), geoIPRules.getGeoIPDatabases());
-        SuspicionList testList = WAFSuspicionRules.loadSuspicionList("waf/suspicion-list-test.xml");
-        assertEquals(Set.of(), new WAFSuspicionRules(List.of(testList)).getGeoIPDatabases());
     }
 
 }

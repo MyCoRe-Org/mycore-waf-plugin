@@ -10,11 +10,11 @@ import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -27,8 +27,10 @@ import org.mycore.common.events.MCRShutdownHandler;
 import org.mycore.waf.suspicion.GeoIPLookup;
 
 /**
- * Provides the GeoIP databases used by the suspicion rules. Only databases referenced by a loaded
- * rule are used. They are configured in {@code MCR.WAF.GeoIP.Database.<name>.*}, stored in
+ * Provides the GeoIP databases used by the suspicion rules. The databases listed in
+ * {@code MCR.WAF.GeoIP.Databases} are loaded and kept up to date, independent of the suspicion
+ * rules. The list is empty by default. They are configured in
+ * {@code MCR.WAF.GeoIP.Database.<name>.*}, stored in
  * {@code MCR.WAF.GeoIP.Directory} and updated in a background thread every
  * {@code MCR.WAF.GeoIP.UpdateIntervalHours} hours. While a database is not available, for example
  * because the first download failed, the update is retried every
@@ -44,6 +46,7 @@ public class WAFGeoIPService implements GeoIPLookup {
 
     private static final String CONFIG_PREFIX = "MCR.WAF.GeoIP.";
     private static final String CONFIG_DIRECTORY = CONFIG_PREFIX + "Directory";
+    private static final String CONFIG_DATABASES = CONFIG_PREFIX + "Databases";
     private static final String CONFIG_UPDATE_INTERVAL_HOURS = CONFIG_PREFIX + "UpdateIntervalHours";
     private static final String CONFIG_RETRY_INTERVAL_MINUTES = CONFIG_PREFIX + "RetryIntervalMinutes";
 
@@ -90,14 +93,12 @@ public class WAFGeoIPService implements GeoIPLookup {
 
     /**
      * Creates the service from the configuration and starts the background thread that loads and
-     * updates the databases. Only the given databases are loaded, so that nothing is downloaded for
-     * rules that do not use GeoIP.
+     * updates the databases listed in {@code MCR.WAF.GeoIP.Databases}.
      *
-     * @param databaseNames the names of the databases referenced by the suspicion rules
-     * @return the started service, or a service without databases if none are needed or configured
+     * @return the started service, or a service without databases if none are configured
      */
-    public static WAFGeoIPService start(Set<String> databaseNames) {
-        List<GeoIPDatabase> databases = databaseNames.isEmpty() ? List.of() : loadConfiguration(databaseNames);
+    public static WAFGeoIPService start() {
+        List<GeoIPDatabase> databases = loadConfiguration();
         WAFGeoIPService service = new WAFGeoIPService(databases);
         if (!databases.isEmpty()) {
             service.startUpdates(
@@ -109,8 +110,17 @@ public class WAFGeoIPService implements GeoIPLookup {
         return service;
     }
 
-    private static List<GeoIPDatabase> loadConfiguration(Set<String> databaseNames) {
+    private static List<GeoIPDatabase> loadConfiguration() {
         List<GeoIPDatabase> databases = new ArrayList<>();
+        List<String> databaseNames = MCRConfiguration2.getString(CONFIG_DATABASES).stream()
+            .flatMap(value -> Arrays.stream(value.split(",")))
+            .map(String::trim)
+            .filter(name -> !name.isEmpty())
+            .toList();
+        if (databaseNames.isEmpty()) {
+            LOGGER.info("GeoIP is disabled, {} is empty", CONFIG_DATABASES);
+            return databases;
+        }
         Optional<String> directory;
         try {
             directory = MCRConfiguration2.getString(CONFIG_DIRECTORY).filter(value -> !value.isBlank());
@@ -128,7 +138,8 @@ public class WAFGeoIPService implements GeoIPLookup {
             String prefix = CONFIG_PREFIX + "Database." + name + ".";
             Optional<String> fileName = MCRConfiguration2.getString(prefix + "File");
             if (fileName.isEmpty()) {
-                LOGGER.error("GeoIP database '{}' is used by suspicion rules, but {}File is not set", name, prefix);
+                LOGGER.error("GeoIP database '{}' is listed in {}, but {}File is not set", name, CONFIG_DATABASES,
+                    prefix);
                 continue;
             }
             URI url = MCRConfiguration2.getString(prefix + "URL").filter(value -> !value.isBlank())

@@ -2,7 +2,6 @@ package org.mycore.waf.suspicion;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 
 /**
  * A single fact (predicate) that is evaluated against the client information of a solved
@@ -22,14 +21,6 @@ public abstract class ClientFact {
      * @return true if the fact holds, false otherwise
      */
     public abstract boolean matches(ClientInformation information);
-
-    /**
-     * Adds the names of the GeoIP databases this fact and its children look up.
-     *
-     * @param databases the set to add the names to
-     */
-    void collectGeoIPDatabases(Set<String> databases) {
-    }
 
     /**
      * Evaluates all facts, without short circuit. If any fact cannot be evaluated, the exception is

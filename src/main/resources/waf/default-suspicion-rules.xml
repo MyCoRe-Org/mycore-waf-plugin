@@ -5,7 +5,7 @@
   click a checkbox drawn on a canvas before it gets access. The rules were derived from
   fingerprints of bots that solved the Proof of Work challenge. Each rule name is logged as the
   reason why a client was considered suspicious. The rules based on the client IP are in
-  waf/geoip-suspicion-rules.xml, because they download GeoIP databases.
+  waf/geoip-suspicion-rules.xml, because they need GeoIP databases.
 -->
 <suspicion-list xmlns="http://www.mycore.org/waf/suspicion"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"

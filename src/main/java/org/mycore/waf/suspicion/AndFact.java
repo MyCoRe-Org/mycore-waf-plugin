@@ -6,7 +6,6 @@ import jakarta.xml.bind.annotation.XmlElement;
 import jakarta.xml.bind.annotation.XmlElements;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 
 /**
  * A fact that is true if all contained facts are true. Never matches if it contains no facts.
@@ -35,11 +34,6 @@ public class AndFact extends ClientFact {
     @Override
     public boolean matches(ClientInformation information) {
         return !facts.isEmpty() && evaluateAll(facts, information).stream().allMatch(Boolean::booleanValue);
-    }
-
-    @Override
-    void collectGeoIPDatabases(Set<String> databases) {
-        facts.forEach(fact -> fact.collectGeoIPDatabases(databases));
     }
 
     @Override
