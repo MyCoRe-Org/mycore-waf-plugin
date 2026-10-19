@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suspicion-list xmlns="http://www.mycore.org/waf/suspicion">
+  <rule name="or-value-first">
+    <or>
+      <value field="timezone" pattern="Asia/Shanghai"/>
+      <country code="CN"/>
+    </or>
+  </rule>
+  <rule name="or-country-first">
+    <or>
+      <country code="CN"/>
+      <value field="timezone" pattern="Asia/Shanghai"/>
+    </or>
+  </rule>
+  <rule name="not-and">
+    <not>
+      <and>
+        <value field="timezone" pattern="Europe/.*"/>
+        <country code="CN"/>
+      </and>
+    </not>
+  </rule>
+</suspicion-list>
