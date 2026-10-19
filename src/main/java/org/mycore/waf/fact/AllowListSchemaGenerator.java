@@ -2,7 +2,6 @@ package org.mycore.waf.fact;
 
 import jakarta.xml.bind.JAXBContext;
 import jakarta.xml.bind.SchemaOutputResolver;
-import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -27,11 +26,23 @@ public class AllowListSchemaGenerator {
      */
     public static void main(String[] args) throws Exception {
         Path outputPath = args.length > 0 ? Path.of(args[0]) : Path.of("allow-list.xsd");
+        generateSchema(AllowList.class, outputPath);
+    }
+
+    /**
+     * Generates the XML schema for a JAXB root class and writes it to the given path. The parent
+     * directories are created if necessary.
+     *
+     * @param rootClass the JAXB root class
+     * @param outputPath the file to write the schema to
+     * @throws Exception if the schema cannot be generated or written
+     */
+    public static void generateSchema(Class<?> rootClass, Path outputPath) throws Exception {
         if (outputPath.getParent() != null) {
             Files.createDirectories(outputPath.getParent());
         }
         try (OutputStream output = Files.newOutputStream(outputPath)) {
-            JAXBContext context = JAXBContext.newInstance(AllowList.class);
+            JAXBContext context = JAXBContext.newInstance(rootClass);
             context.generateSchema(new SchemaOutputResolver() {
 
                 @Override

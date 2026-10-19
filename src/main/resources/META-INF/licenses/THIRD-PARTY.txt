@@ -1,0 +1,7 @@
+The mcr-waf-plugin JAR contains the following third party library, relocated to the package
+org.mycore.waf.shaded.com.maxmind.db:
+
+MaxMind DB Reader (com.maxmind.db:maxmind-db)
+https://github.com/maxmind/MaxMind-DB-Reader-java
+Copyright (c) MaxMind, Inc.
+Licensed under the Apache License, Version 2.0, see maxmind-db-LICENSE-APACHE-2.0.txt
