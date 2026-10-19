@@ -5,6 +5,7 @@ import jakarta.xml.bind.annotation.XmlAccessorType;
 import jakarta.xml.bind.annotation.XmlAttribute;
 import jakarta.xml.bind.annotation.XmlElement;
 import jakarta.xml.bind.annotation.XmlElements;
+import java.util.Set;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -55,6 +56,12 @@ public class SuspicionRule {
         } catch (UndeterminableFactException e) {
             LOGGER.debug("Suspicion rule '{}' cannot be evaluated: {}", name, e.getMessage());
             return false;
+        }
+    }
+
+    void collectGeoIPDatabases(Set<String> databases) {
+        if (fact != null) {
+            fact.collectGeoIPDatabases(databases);
         }
     }
 

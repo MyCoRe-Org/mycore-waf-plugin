@@ -5,9 +5,9 @@ import jakarta.xml.bind.annotation.XmlAccessType;
 import jakarta.xml.bind.annotation.XmlAccessorType;
 import jakarta.xml.bind.annotation.XmlAttribute;
 import java.util.regex.Pattern;
-import java.util.regex.PatternSyntaxException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.mycore.waf.WAFRegex;
 
 /**
  * Base class for facts that match a Java regex against a single value taken from the request. The
@@ -60,15 +60,7 @@ public abstract class RegexFact extends Fact {
     }
 
     static Pattern requireValidPattern(String regex, String context) {
-        if (regex == null) {
-            throw new IllegalArgumentException("Missing regular expression in " + context);
-        }
-        try {
-            return Pattern.compile(regex);
-        } catch (PatternSyntaxException e) {
-            throw new IllegalArgumentException(
-                "Invalid regular expression '" + regex + "' in " + context + ": " + e.getMessage(), e);
-        }
+        return WAFRegex.requireValidPattern(regex, context);
     }
 
     @Override

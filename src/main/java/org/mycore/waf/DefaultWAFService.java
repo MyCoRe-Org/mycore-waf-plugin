@@ -12,12 +12,14 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import org.mycore.common.config.MCRConfiguration2;
 import org.mycore.frontend.MCRFrontendUtil;
 import org.mycore.frontend.jersey.MCRJWTUtil;
@@ -66,6 +68,9 @@ public class DefaultWAFService implements WAFService {
   private static final int DEFAULT_INTERACTION_MIN_DURATION = 600;
   private static final int DEFAULT_INTERACTION_MIN_POINTER_MOVES = 3;
 
+  // How long after expiry a challenge or interaction token is still read for its redirect URL
+  private static final long FLOW_TOKEN_EXPIRY_LEEWAY_SECONDS = 24 * 60 * 60;
+
   // Services
   private final WAFAllowListChecker allowListChecker;
   private final WAFAllowRules allowRules;
@@ -81,8 +86,9 @@ public class DefaultWAFService implements WAFService {
     this.allowListChecker = new WAFAllowListChecker();
     this.allowRules = WAFAllowRules.load();
     this.suspicionRules = WAFSuspicionRules.load();
-    // The GeoIP databases are only needed (and downloaded) if suspicion rules are configured
-    this.geoIP = suspicionRules.isEmpty() ? GeoIPLookup.NONE : WAFGeoIPService.start();
+    // Only the GeoIP databases referenced by the loaded suspicion rules are downloaded
+    Set<String> geoIPDatabases = suspicionRules.getGeoIPDatabases();
+    this.geoIP = geoIPDatabases.isEmpty() ? GeoIPLookup.NONE : WAFGeoIPService.start(geoIPDatabases);
     this.interactionValidator = new InteractionValidator(
         MCRConfiguration2.getInt(CONFIG_INTERACTION_MIN_DURATION).orElse(DEFAULT_INTERACTION_MIN_DURATION),
         MCRConfiguration2.getInt(CONFIG_INTERACTION_MIN_POINTER_MOVES)
@@ -187,6 +193,41 @@ public class DefaultWAFService implements WAFService {
     return true;
   }
 
+  /**
+   * Verifies the signature of a token, but accepts tokens that expired up to a day ago. Only used
+   * to recover the redirect URL and the attempt counter of a challenge flow, so that a user who
+   * waited too long on a challenge page is still sent to the originally requested URL.
+   */
+  private static DecodedJWT decodeFlowToken(String token) {
+    if (token == null || token.isEmpty()) {
+      return null;
+    }
+    try {
+      return JWT.require(MCRJWTUtil.getJWTAlgorithm())
+          .acceptExpiresAt(FLOW_TOKEN_EXPIRY_LEEWAY_SECONDS)
+          .build()
+          .verify(token);
+    } catch (JWTVerificationException e) {
+      return null;
+    }
+  }
+
+  /**
+   * Returns a string claim. In java-jwt a missing claim is not null, so both cases are handled.
+   */
+  private static String getClaimString(DecodedJWT jwt, String name, String defaultValue) {
+    String value = jwt.getClaim(name).asString();
+    return value == null ? defaultValue : value;
+  }
+
+  /**
+   * Returns an integer claim, or the default value if the claim is missing or no integer.
+   */
+  private static int getClaimInt(DecodedJWT jwt, String name, int defaultValue) {
+    Integer value = jwt.getClaim(name).asInt();
+    return value == null ? defaultValue : value;
+  }
+
   public DecodedJWT getChallengeTokenDecoded(HttpServletRequest req, String challengeToken) {
     // check if the challenge token is valid and corresponds to a previously generated challenge
     DecodedJWT jwt;
@@ -213,22 +254,16 @@ public class DefaultWAFService implements WAFService {
       return false;
     }
 
-    Claim ipClaim = jwt.getClaim(IP_CLAIM);
-    if (ipClaim.isNull() || !MCRFrontendUtil.getRemoteAddr(request).equals(ipClaim.asString())) {
+    if (!MCRFrontendUtil.getRemoteAddr(request).equals(getClaimString(jwt, IP_CLAIM, null))) {
       return false;
     }
 
-    Claim challengeClaim = jwt.getClaim(CHALLENGE_CLAIM);
-    if(challengeClaim.isNull()) {
+    // Other tokens signed with the same key (WAF-PASSED, interaction) have no challenge claims
+    String challenge = getClaimString(jwt, CHALLENGE_CLAIM, null);
+    int difficulty = getClaimInt(jwt, DIFFICULTY_CLAIM, -1);
+    if (challenge == null || difficulty < 0) {
       return false;
     }
-    String challenge = challengeClaim.asString();
-
-    Claim difficultyClaim = jwt.getClaim(DIFFICULTY_CLAIM);
-    if(difficultyClaim.isNull()) {
-      return false;
-    }
-    int difficulty = difficultyClaim.asInt();
 
     if(!checkPowSolutionWithDifficulty(powSolution, challenge, difficulty)){
       return false;
@@ -416,22 +451,9 @@ public class DefaultWAFService implements WAFService {
   public void redirectAfterChallenge(HttpServletRequest request, HttpServletResponse response)
       throws IOException {
     // Extract redirect URL from the challenge or interaction token
-    String challengeToken = getFlowToken(request);
-    if (challengeToken == null || challengeToken.isEmpty()) {
-      // Fallback to root if no token
-      response.sendRedirect(joinPaths(MCRFrontendUtil.getBaseURL(request), "/"));
-      return;
-    }
-
-    DecodedJWT jwt = getChallengeTokenDecoded(request, challengeToken);
-    if (jwt == null) {
-      // Fallback to root if token is invalid
-      response.sendRedirect(joinPaths(MCRFrontendUtil.getBaseURL(request), "/"));
-      return;
-    }
-
-    Claim redirectClaim = jwt.getClaim(REDIRECT_URL_CLAIM);
-    String redirectURL = redirectClaim.isNull() ? "/" : redirectClaim.asString();
+    DecodedJWT jwt = decodeFlowToken(getFlowToken(request));
+    // Fallback to root if there is no valid token
+    String redirectURL = jwt == null ? "/" : getClaimString(jwt, REDIRECT_URL_CLAIM, "/");
 
     // Redirect to the original URL
     response.sendRedirect(joinPaths(MCRFrontendUtil.getBaseURL(request), redirectURL));
@@ -440,26 +462,17 @@ public class DefaultWAFService implements WAFService {
   @Override
   public void redirectAfterFailedAttempt(HttpServletRequest request, HttpServletResponse response)
       throws IOException {
-    // Extract attempt and redirect URL from the challenge or interaction token
-    String challengeToken = getFlowToken(request);
-    if (challengeToken == null || challengeToken.isEmpty()) {
-      // Fallback to challenge page with attempt 1
-      redirectToChallengeWithAttempt(request, response, 1);
-      return;
-    }
-
-    DecodedJWT jwt = getChallengeTokenDecoded(request, challengeToken);
+    // Extract attempt and redirect URL from the challenge or interaction token, an expired token
+    // still carries the originally requested URL
+    DecodedJWT jwt = decodeFlowToken(getFlowToken(request));
     if (jwt == null) {
       // Fallback to challenge page with attempt 1
       redirectToChallengeWithAttempt(request, response, 1);
       return;
     }
 
-    Claim attemptClaim = jwt.getClaim(ATTEMPT_CLAIM);
-    int currentAttempt = attemptClaim.isNull() ? 0 : attemptClaim.asInt();
-
-    Claim redirectClaim = jwt.getClaim(REDIRECT_URL_CLAIM);
-    String redirectURL = redirectClaim.isNull() ? "/" : redirectClaim.asString();
+    int currentAttempt = getClaimInt(jwt, ATTEMPT_CLAIM, 0);
+    String redirectURL = getClaimString(jwt, REDIRECT_URL_CLAIM, "/");
 
     // Increment attempt and redirect to challenge page
     int newAttempt = currentAttempt + 1;
@@ -515,9 +528,7 @@ public class DefaultWAFService implements WAFService {
   @Override
   public List<String> findSuspicionReasons(HttpServletRequest request) {
     DecodedJWT jwt = getChallengeTokenDecoded(request, request.getParameter(POW_CHALLENGE_TOKEN_PARAMETER));
-    String redirectURL = jwt == null || jwt.getClaim(REDIRECT_URL_CLAIM).isNull()
-        ? null
-        : jwt.getClaim(REDIRECT_URL_CLAIM).asString();
+    String redirectURL = jwt == null ? null : getClaimString(jwt, REDIRECT_URL_CLAIM, null);
     return suspicionRules.findMatchingRules(request, request.getParameter(CLIENT_INFORMATION_PARAMETER),
         MCRFrontendUtil.getRemoteAddr(request), redirectURL, geoIP);
   }
@@ -530,10 +541,8 @@ public class DefaultWAFService implements WAFService {
     String redirectURL = "/";
     int attempt = 0;
     if (challengeJWT != null) {
-      Claim redirectClaim = challengeJWT.getClaim(REDIRECT_URL_CLAIM);
-      redirectURL = redirectClaim.isNull() ? "/" : redirectClaim.asString();
-      Claim attemptClaim = challengeJWT.getClaim(ATTEMPT_CLAIM);
-      attempt = attemptClaim.isNull() ? 0 : attemptClaim.asInt();
+      redirectURL = getClaimString(challengeJWT, REDIRECT_URL_CLAIM, "/");
+      attempt = getClaimInt(challengeJWT, ATTEMPT_CLAIM, 0);
     }
 
     // Random checkbox position in per mille of the canvas size. The vertical position avoids the
@@ -550,6 +559,7 @@ public class DefaultWAFService implements WAFService {
         .withClaim(REDIRECT_URL_CLAIM, redirectURL)
         .withClaim(ATTEMPT_CLAIM, attempt)
         .withClaim(IP_CLAIM, MCRFrontendUtil.getRemoteAddr(request))
+        .withIssuedAt(Date.from(Instant.now()))
         .withExpiresAt(Date.from(Instant.now().plus(expiryMinutes, ChronoUnit.MINUTES)))
         .sign(MCRJWTUtil.getJWTAlgorithm());
 
@@ -578,19 +588,21 @@ public class DefaultWAFService implements WAFService {
     if (jwt == null) {
       return List.of("invalid or expired interaction token");
     }
-    if (!STAGE_INTERACTION.equals(jwt.getClaim(STAGE_CLAIM).asString())) {
+    if (!STAGE_INTERACTION.equals(getClaimString(jwt, STAGE_CLAIM, null))) {
       return List.of("token is not an interaction token");
     }
-    Claim ipClaim = jwt.getClaim(IP_CLAIM);
-    if (ipClaim.isNull() || !MCRFrontendUtil.getRemoteAddr(request).equals(ipClaim.asString())) {
+    if (!MCRFrontendUtil.getRemoteAddr(request).equals(getClaimString(jwt, IP_CLAIM, null))) {
       return List.of("interaction token was issued for another IP");
     }
-    Integer boxX = jwt.getClaim(BOX_X_CLAIM).asInt();
-    Integer boxY = jwt.getClaim(BOX_Y_CLAIM).asInt();
-    if (boxX == null || boxY == null) {
-      return List.of("interaction token without checkbox position");
+    int boxX = getClaimInt(jwt, BOX_X_CLAIM, -1);
+    int boxY = getClaimInt(jwt, BOX_Y_CLAIM, -1);
+    if (boxX < 0 || boxY < 0 || jwt.getIssuedAtAsInstant() == null) {
+      return List.of("incomplete interaction token");
     }
-    return interactionValidator.validate(request.getParameter(INTERACTION_EVENTS_PARAMETER), boxX, boxY);
+    // Measured on the server, the timestamps in the recorded events are controlled by the client
+    long elapsedMillis = Duration.between(jwt.getIssuedAtAsInstant(), Instant.now()).toMillis();
+    return interactionValidator.validate(request.getParameter(INTERACTION_EVENTS_PARAMETER), boxX, boxY,
+        elapsedMillis);
   }
 
 }

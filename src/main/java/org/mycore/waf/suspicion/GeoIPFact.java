@@ -4,8 +4,9 @@ import jakarta.xml.bind.annotation.XmlAccessType;
 import jakarta.xml.bind.annotation.XmlAccessorType;
 import jakarta.xml.bind.annotation.XmlAttribute;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
-import java.util.regex.PatternSyntaxException;
+import org.mycore.waf.WAFRegex;
 
 /**
  * Base class for facts that look up the client IP address in a GeoIP database. If the database is
@@ -25,6 +26,15 @@ public abstract class GeoIPFact extends ClientFact {
      */
     protected abstract String getDefaultDatabase();
 
+    private String getDatabaseName() {
+        return database == null ? getDefaultDatabase() : database;
+    }
+
+    @Override
+    void collectGeoIPDatabases(Set<String> databases) {
+        databases.add(getDatabaseName());
+    }
+
     /**
      * Looks up the client IP address.
      *
@@ -33,7 +43,7 @@ public abstract class GeoIPFact extends ClientFact {
      * @throws UndeterminableFactException if there is no record for the address
      */
     protected Map<String, Object> lookup(ClientInformation information) {
-        String databaseName = database == null ? getDefaultDatabase() : database;
+        String databaseName = getDatabaseName();
         Map<String, Object> record = information.geoIP().lookup(databaseName, information.remoteAddress());
         if (record == null) {
             throw new UndeterminableFactException(
@@ -68,15 +78,8 @@ public abstract class GeoIPFact extends ClientFact {
      * @return the compiled pattern, or null if the regex is null
      */
     protected Pattern compile(String regex, String attribute) {
-        if (regex == null) {
-            return null;
-        }
-        try {
-            return Pattern.compile(regex);
-        } catch (PatternSyntaxException e) {
-            throw new IllegalArgumentException("Invalid regular expression '" + regex + "' in " + attribute
-                + " of " + getClass().getSimpleName() + ": " + e.getMessage(), e);
-        }
+        return regex == null ? null
+            : WAFRegex.requireValidPattern(regex, attribute + " of " + getClass().getSimpleName());
     }
 
 }

@@ -19,8 +19,8 @@ import java.util.List;
  * <p>
  * The recorded data is a JSON object with an {@code events} array. Every event has the fields
  * {@code type}, {@code t} (milliseconds since the page was shown), {@code x}, {@code y},
- * {@code trusted} (Event.isTrusted) and, for pointer events, {@code pointerType}. Click events also
- * carry the canvas size {@code w} and {@code h} at the time of the click.
+ * {@code trusted} (Event.isTrusted) and, for pointer events, {@code pointerType}. Click and pointerup
+ * events also carry the canvas size {@code w} and {@code h} at the time of the event.
  */
 public class InteractionValidator {
 
@@ -29,6 +29,9 @@ public class InteractionValidator {
 
     /** Minimal distance of the checkbox to the canvas border in CSS pixels. */
     public static final int MARGIN = 16;
+
+    /** Minimal width and height of the canvas in CSS pixels, smaller phones have at least 320 x 480. */
+    public static final int MIN_CANVAS_SIZE = 240;
 
     // Clicks slightly outside the drawn box are accepted, rounding differs between browsers
     private static final double TOLERANCE = 4;
@@ -52,58 +55,65 @@ public class InteractionValidator {
 
     /**
      * Validates the recorded events.
+     * <p>
+     * Everything in the recorded events is reported by the client and can be forged by a bot that
+     * reads the checkbox position from the page. The time between issuing the interaction token and
+     * receiving the result is therefore also measured on the server. The interaction challenge
+     * raises the cost for bots and collects data about them, it cannot prove human input.
      *
      * @param recordedEvents the JSON data sent by the interaction challenge page
      * @param boxX the horizontal checkbox position in per mille of the canvas width
      * @param boxY the vertical checkbox position in per mille of the canvas height
+     * @param serverElapsedMillis the time between issuing the interaction token and receiving the result
      * @return the problems found, empty if the interaction looks like a human click on the checkbox
      */
-    public List<String> validate(String recordedEvents, int boxX, int boxY) {
+    public List<String> validate(String recordedEvents, int boxX, int boxY, long serverElapsedMillis) {
         List<String> problems = new ArrayList<>();
+        if (serverElapsedMillis < minDurationMillis) {
+            problems.add("submitted " + serverElapsedMillis + " ms after the page was issued");
+        }
         JsonArray events = parseEvents(recordedEvents);
         if (events == null) {
             problems.add("unparsable events");
             return problems;
         }
 
-        int untrusted = 0;
-        JsonObject click = null;
-        int clickIndex = -1;
-        for (int i = 0; i < events.size(); i++) {
+        // The checkbox is activated by a click or, on touch devices that do not synthesize a click
+        // for a canvas (iOS), by a pointerup. Untrusted events elsewhere in the recording are ignored,
+        // browser extensions may dispatch them.
+        JsonObject activation = null;
+        int activationIndex = -1;
+        for (int i = 0; i < events.size() && activation == null; i++) {
             JsonObject event = asObject(events.get(i));
-            if (event == null) {
-                continue;
-            }
-            if (!getBoolean(event, "trusted")) {
-                untrusted++;
-                continue;
-            }
-            if (click == null && "click".equals(getString(event, "type")) && isOnCheckbox(event, boxX, boxY)) {
-                click = event;
-                clickIndex = i;
+            if (event != null && getBoolean(event, "trusted") && isActivation(event)
+                && isOnCheckbox(event, boxX, boxY)) {
+                activation = event;
+                activationIndex = i;
             }
         }
-        if (untrusted > 0) {
-            problems.add(untrusted + " untrusted events");
-        }
-        if (click == null) {
+        if (activation == null) {
             problems.add("no trusted click on the checkbox");
             return problems;
         }
 
-        double clickTime = getNumber(click, "t", -1);
+        double clickTime = getNumber(activation, "t", -1);
         if (clickTime < minDurationMillis) {
             problems.add("click after " + Math.round(clickTime) + " ms");
         }
 
-        String pointerType = findPointerType(events, clickIndex, click);
+        String pointerType = findPointerType(events, activationIndex, activation);
         if (!"touch".equals(pointerType) && !"pen".equals(pointerType)) {
-            int moves = countPointerMoves(events, clickIndex);
+            int moves = countPointerMoves(events, activationIndex);
             if (moves < minPointerMoves) {
                 problems.add(moves + " pointer moves before the click");
             }
         }
         return problems;
+    }
+
+    private static boolean isActivation(JsonObject event) {
+        String type = getString(event, "type");
+        return "click".equals(type) || "pointerup".equals(type);
     }
 
     /**
@@ -118,12 +128,13 @@ public class InteractionValidator {
         return Math.max(MARGIN, Math.min(position, extent - BOX_SIZE - MARGIN));
     }
 
-    private boolean isOnCheckbox(JsonObject click, int boxX, int boxY) {
+    private static boolean isOnCheckbox(JsonObject click, int boxX, int boxY) {
         double width = getNumber(click, "w", -1);
         double height = getNumber(click, "h", -1);
         double x = getNumber(click, "x", -1);
         double y = getNumber(click, "y", -1);
-        if (width <= 0 || height <= 0) {
+        // A tiny canvas would clamp the checkbox to the same position for every token
+        if (width < MIN_CANVAS_SIZE || height < MIN_CANVAS_SIZE) {
             return false;
         }
         double left = boxPosition(boxX, width);

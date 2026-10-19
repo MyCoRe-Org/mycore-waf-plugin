@@ -15,7 +15,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.DigestInputStream;
-import java.security.DigestOutputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
@@ -23,6 +22,10 @@ import java.time.Instant;
 import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -40,7 +43,7 @@ public class GeoIPDatabase {
 
     private static final Logger LOGGER = LogManager.getLogger();
 
-    private static final Duration REQUEST_TIMEOUT = Duration.ofMinutes(5);
+    private static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofMinutes(5);
 
     private final String name;
 
@@ -51,6 +54,8 @@ public class GeoIPDatabase {
     private final URI checksumURL;
 
     private final Duration maxAge;
+
+    private final Duration requestTimeout;
 
     private volatile Reader reader;
 
@@ -67,6 +72,21 @@ public class GeoIPDatabase {
      * @param maxAge the age of the local file after which it is downloaded again if there is no checksum URL
      */
     public GeoIPDatabase(String name, Path file, URI url, URI checksumURL, Duration maxAge) {
+        this(name, file, url, checksumURL, maxAge, DEFAULT_REQUEST_TIMEOUT);
+    }
+
+    /**
+     * Creates a database with a custom timeout for each download, including the response body.
+     *
+     * @param name the name the database is referenced by in suspicion rules
+     * @param file the local file of the database
+     * @param url the download URL, or null to only use the local file
+     * @param checksumURL the URL of the SHA-256 checksum of the download, or null
+     * @param maxAge the age of the local file after which it is downloaded again if there is no checksum URL
+     * @param requestTimeout the maximal duration of one download
+     */
+    GeoIPDatabase(String name, Path file, URI url, URI checksumURL, Duration maxAge, Duration requestTimeout) {
+        this.requestTimeout = requestTimeout;
         this.name = name;
         this.file = file;
         this.url = url;
@@ -175,7 +195,7 @@ public class GeoIPDatabase {
     }
 
     private String fetchChecksum(HttpClient client) throws IOException, InterruptedException {
-        HttpResponse<String> response = client.send(request(checksumURL),
+        HttpResponse<String> response = send(client, checksumURL,
             HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         if (response.statusCode() != 200) {
             throw new IOException("Fetching " + checksumURL + " failed with HTTP status " + response.statusCode());
@@ -189,22 +209,36 @@ public class GeoIPDatabase {
     }
 
     private String download(HttpClient client, Path target) throws IOException, InterruptedException {
-        HttpResponse<InputStream> response = client.send(request(url), HttpResponse.BodyHandlers.ofInputStream());
-        try (InputStream body = response.body()) {
-            if (response.statusCode() != 200) {
-                throw new IOException("Downloading " + url + " failed with HTTP status " + response.statusCode());
-            }
-            MessageDigest digest = sha256();
-            try (OutputStream output = new DigestOutputStream(Files.newOutputStream(target), digest)) {
-                body.transferTo(output);
-            }
-            return HexFormat.of().formatHex(digest.digest());
+        HttpResponse<Path> response = send(client, url, HttpResponse.BodyHandlers.ofFile(target));
+        if (response.statusCode() != 200) {
+            throw new IOException("Downloading " + url + " failed with HTTP status " + response.statusCode());
+        }
+        return checksum(target);
+    }
+
+    /**
+     * Sends a request and waits for the complete response body. HttpRequest.timeout only limits the
+     * wait for the response headers, a stalled body would block the update thread forever.
+     */
+    private <T> HttpResponse<T> send(HttpClient client, URI uri, HttpResponse.BodyHandler<T> bodyHandler)
+        throws IOException, InterruptedException {
+        CompletableFuture<HttpResponse<T>> future = client.sendAsync(request(uri), bodyHandler);
+        try {
+            return future.get(requestTimeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            throw new IOException("Request to " + uri + " did not complete within " + requestTimeout, e);
+        } catch (InterruptedException e) {
+            future.cancel(true);
+            throw e;
+        } catch (ExecutionException e) {
+            throw new IOException("Request to " + uri + " failed: " + e.getCause().getMessage(), e.getCause());
         }
     }
 
-    private static HttpRequest request(URI uri) {
+    private HttpRequest request(URI uri) {
         return HttpRequest.newBuilder(uri)
-            .timeout(REQUEST_TIMEOUT)
+            .timeout(requestTimeout)
             .header("User-Agent", "MyCoRe-WAF-Plugin")
             .GET()
             .build();

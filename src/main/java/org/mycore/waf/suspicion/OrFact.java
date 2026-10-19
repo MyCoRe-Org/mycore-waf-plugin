@@ -6,6 +6,7 @@ import jakarta.xml.bind.annotation.XmlElement;
 import jakarta.xml.bind.annotation.XmlElements;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * A fact that is true if at least one contained fact is true. Never matches if it contains no
@@ -34,7 +35,12 @@ public class OrFact extends ClientFact {
 
     @Override
     public boolean matches(ClientInformation information) {
-        return facts.stream().anyMatch(fact -> fact.matches(information));
+        return evaluateAll(facts, information).stream().anyMatch(Boolean::booleanValue);
+    }
+
+    @Override
+    void collectGeoIPDatabases(Set<String> databases) {
+        facts.forEach(fact -> fact.collectGeoIPDatabases(databases));
     }
 
     @Override

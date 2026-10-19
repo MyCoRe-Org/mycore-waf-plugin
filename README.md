@@ -111,7 +111,7 @@ Available facts:
 | `parameter-count` | `value`, `min`, `max`, `mode`    | the number of request parameters matches, all constraints are combined                                                               |
 | `header`          | `name`, `pattern`               | the header value fully matches the regex, the header name is looked up ignoring case                                                  |
 | `user-agent`      | `pattern`                       | shortcut for `<header name="User-Agent" pattern="..."/>`                                                                              |
-| `remote-address`  | `cidr` or `pattern`             | the client IP (honoring trusted proxies) lies in the CIDR range or fully matches the regex, `cidr` takes precedence                   |
+| `remote-address`  | `cidr` or `pattern`             | the client IP (honoring trusted proxies) lies in one of the comma separated CIDR ranges or fully matches the regex, `cidr` takes precedence |
 | `cookie`          | `name`, `pattern`               | a cookie with the name exists, optionally with a value fully matching the regex                                                       |
 | `content-type`    | `pattern`                       | the content type of the request fully matches the regex, false if the request has none                                                |
 | `query-string`    | `pattern`                       | the raw query string fully matches the regex, false if the request has none                                                           |
@@ -183,15 +183,19 @@ Reverse DNS lookups are expensive. Results are cached in a bounded `MCRCache`. F
 
 Some bots run real browsers and solve the Proof of Work challenge. Their fingerprints often still give them away, for example a server CPU with 192 cores, a screen resolution of `1280x1024`, a Chinese timezone combined with only English languages, or a Windows User-Agent on a Linux platform. After a valid solution the fingerprint is checked against XML suspicion rules. If any rule matches, the client gets no `WAF-PASSED` cookie yet. Instead it has to click a checkbox that is drawn on a canvas at a random position, so it cannot be found in the DOM.
 
-The page records the events that lead to the click (pointer moves, pointer down/up, click, touch, key, focus and visibility events, each with timestamp, coordinates and `isTrusted`). The server accepts the interaction only if a trusted click hits the checkbox, it happened at least `MCR.WAF.Interaction.MinDurationMillis` after the page was shown, and a mouse click was preceded by at least `MCR.WAF.Interaction.MinPointerMoves` pointer moves. A failed interaction counts as a failed attempt and leads back to the Proof of Work challenge.
+The feature is **disabled by default** (`MCR.WAF.SuspicionRules` is empty). The canvas checkbox cannot be operated with a keyboard or a screen reader, so every installation has to decide whether this is acceptable for its users. See [Example configuration](#example-configuration-checkbox-for-visitors-outside-of-europe) below.
+
+The page records the events that lead to the click (pointer moves, pointer down/up, click, touch, key, focus and visibility events, each with timestamp, coordinates and `isTrusted`). The server accepts the interaction only if a trusted click (or, on touch devices, a pointerup) hits the checkbox on a canvas of at least 240 x 240 pixels, at least `MCR.WAF.Interaction.MinDurationMillis` passed both according to the client and measured on the server, and a mouse click was preceded by at least `MCR.WAF.Interaction.MinPointerMoves` pointer moves. Untrusted events that are not part of the click, for example dispatched by browser extensions, are ignored. A failed interaction counts as a failed attempt and leads back to the Proof of Work challenge, an expired interaction token keeps the originally requested URL.
+
+The recorded events are reported by the client. A bot that reads the checkbox position from the page can forge them with a single request. The interaction challenge therefore raises the cost for bots and collects data about them, it cannot prove human input.
 
 The outcome is logged at `INFO` together with the matching rule names. The complete recorded events are logged at `DEBUG` by `org.mycore.waf.WAFFilter`, so that bots that learn to pass the interaction challenge can be analyzed.
 
 | Property                               | Default                             | Description                                                                                                  |
 |----------------------------------------|-------------------------------------|--------------------------------------------------------------------------------------------------------------|
-| `MCR.WAF.SuspicionRules`               | `waf/default-suspicion-rules.xml`   | Comma separated list of classpath resources with suspicion rule files. An empty value disables the feature. |
+| `MCR.WAF.SuspicionRules`               | _(empty)_                           | Comma separated list of classpath resources with suspicion rule files. An empty value disables the feature. |
 | `MCR.WAF.Interaction.ExpiryMinutes`    | `5`                                 | How long the interaction token (and thus the checkbox) is valid.                                             |
-| `MCR.WAF.Interaction.MinDurationMillis`| `600`                               | Minimal time between showing the checkbox and the click.                                                    |
+| `MCR.WAF.Interaction.MinDurationMillis`| `600`                               | Minimal time between showing the checkbox and the click, checked on the client timestamps and on the server. |
 | `MCR.WAF.Interaction.MinPointerMoves`  | `3`                                 | Minimal number of pointer moves before a mouse click. Touch and pen input is exempt.                        |
 
 A suspicion rule file is validated against `waf/suspicion-list.xsd`, which is generated from the JAXB model and packaged in the JAR. Every `rule` needs a `name`, which is logged as the reason, and contains exactly one fact:
@@ -205,8 +209,8 @@ A suspicion rule file is validated against `waf/suspicion-list.xsd`, which is ge
 | `count`                    | `field`, `min`, `max`              | the number of array elements lies in the inclusive range                                                                                   |
 | `header`                   | `name`, `pattern`, `match`         | the regex matches a header of the solution request (missing header never matches)                                                          |
 | `same-as-header`           | `field`, `header`                  | the field equals the header, for example `userAgent` and `User-Agent`                                                                      |
-| `timezone-offset-mismatch` |                                    | `timezone` is no known IANA timezone or does not fit `timezoneOffset` at `timestamp`                                                       |
-| `remote-address`           | `cidr`, `pattern`                  | the client IP lies in one of the comma separated CIDR ranges and/or matches the regex                                                      |
+| `timezone-offset-mismatch` |                                    | `timezone` does not fit `timezoneOffset` at `timestamp`. A timezone unknown to the JVM cannot be evaluated                                |
+| `remote-address`           | `cidr`, `pattern`                  | same as in the allow rules: the client IP lies in one of the comma separated CIDR ranges or matches the regex, `cidr` takes precedence      |
 | `country`                  | `code`, `database`                 | the regex matches the ISO country code of the client IP, see [GeoIP Databases](#geoip-databases)                                          |
 | `asn`                      | `number`, `organization`, `database` | the regexes match the number and/or the organization of the autonomous system (network operator) of the client IP                       |
 | `redirect-url`             | `pattern`, `match`                 | the regex matches the originally requested URL (relative to the base URL, with query string)                                              |
@@ -229,21 +233,50 @@ The client information fields are `userAgent`, `language`, `languages`, `platfor
 </suspicion-list>
 ```
 
-If a fact cannot be evaluated because data is missing, for example a GeoIP fact for a private IP address or while the database has not been downloaded yet, the whole rule does not match, even if the fact is wrapped in `not`.
+If a fact cannot be evaluated because data is missing, for example a GeoIP fact for a private IP address or while the database has not been downloaded yet, the whole rule does not match, even if the fact is wrapped in `not`. All children of `and` and `or` are evaluated, so the result does not depend on their order.
 
 The default rules contain `outside-europe` (country not in the EU, the EEA, Switzerland, the United Kingdom, the micro states, the Western Balkans, Ukraine or Moldova) and `cloud-provider` (Amazon, Microsoft, Google Cloud, Oracle, Tencent, Alibaba, Huawei Cloud, DigitalOcean, Akamai/Linode and Vultr by AS number).
 
-To keep the default rules and add your own, extend the property:
+Own rule files are added to the list, for example `MCR.WAF.SuspicionRules=waf/default-suspicion-rules.xml,waf/my-suspicion-rules.xml`. A file in `<MyCoRe-Home>/resources/waf/` is on the classpath.
+
+#### Example configuration: checkbox for visitors outside of Europe
+
+The following configuration in the `mycore.properties` of the application enables the default rules. Visitors from Europe with a regular browser pass after the Proof of Work as before. Visitors whose IP is located outside of Europe or in a cloud data center, and clients with a suspicious fingerprint, additionally have to click the checkbox. They are not blocked. The GeoIP databases are downloaded automatically, all GeoIP properties except the first line show the defaults and can be omitted.
 
 ```properties
-MCR.WAF.SuspicionRules=%MCR.WAF.SuspicionRules%,waf/my-suspicion-rules.xml
+# Enable the suspicion rules shipped with the plugin
+MCR.WAF.SuspicionRules=waf/default-suspicion-rules.xml
+
+# GeoIP databases, downloaded to the data directory and updated daily
+MCR.WAF.GeoIP.Directory=%MCR.datadir%/waf/geoip
+MCR.WAF.GeoIP.UpdateIntervalHours=24
+MCR.WAF.GeoIP.RetryIntervalMinutes=15
+MCR.WAF.GeoIP.Database.country.File=user-country.mmdb
+MCR.WAF.GeoIP.Database.country.URL=https://github.com/sapics/ip-location-db/releases/download/latest/user-country.mmdb
+MCR.WAF.GeoIP.Database.country.ChecksumURL=https://github.com/sapics/ip-location-db/releases/download/checksum/user-country.mmdb.sha256
+MCR.WAF.GeoIP.Database.asn.File=origin-asn.mmdb
+MCR.WAF.GeoIP.Database.asn.URL=https://github.com/sapics/ip-location-db/releases/download/latest/origin-asn.mmdb
+MCR.WAF.GeoIP.Database.asn.ChecksumURL=https://github.com/sapics/ip-location-db/releases/download/checksum/origin-asn.mmdb.sha256
+
+# Interaction challenge
+MCR.WAF.Interaction.ExpiryMinutes=5
+MCR.WAF.Interaction.MinDurationMillis=600
+MCR.WAF.Interaction.MinPointerMoves=3
 ```
+
+To log the recorded events of the interaction challenge, enable debug logging in `<MyCoRe-Home>/resources/log4j2.xml`:
+
+```xml
+<Logger name="org.mycore.waf.WAFFilter" level="debug"/>
+```
+
+To change the list of European countries or to use only some of the default rules, copy `waf/default-suspicion-rules.xml` from the JAR to `<MyCoRe-Home>/resources/waf/my-suspicion-rules.xml`, edit it and set `MCR.WAF.SuspicionRules=waf/my-suspicion-rules.xml`.
 
 ### GeoIP Databases
 
 The `country` and `asn` facts look up the client IP in GeoIP databases in the MaxMind DB (MMDB) format. By default the databases `user-country.mmdb` and `origin-asn.mmdb` of [ip-location-db](https://github.com/sapics/ip-location-db) are used. They are published under the Public Domain Dedication and License (PDDL) and can be used without attribution. GeoLite2 and DB-IP MMDB files work as well, both the flat (`country_code`) and the nested (`country.iso_code`) country layout are supported.
 
-The databases are stored in `MCR.WAF.GeoIP.Directory` and downloaded by a background thread at startup and every `MCR.WAF.GeoIP.UpdateIntervalHours` hours. With a checksum URL only the small SHA-256 file is fetched to check for changes, and every download is verified before it replaces the local file. A failed update keeps the previous database. Without URL only the local file is used, so a database can also be placed there manually, for example on servers without internet access (a proxy can be configured with the JVM properties `https.proxyHost` and `https.proxyPort`). The databases are only downloaded if suspicion rules are configured.
+The databases are stored in `MCR.WAF.GeoIP.Directory` and downloaded by a background thread at startup and every `MCR.WAF.GeoIP.UpdateIntervalHours` hours. With a checksum URL only the small SHA-256 file is fetched to check for changes, and every download is verified before it replaces the local file. A failed update keeps the previous database. Without URL only the local file is used, so a database can also be placed there manually, for example on servers without internet access (a proxy can be configured with the JVM properties `https.proxyHost` and `https.proxyPort`). Only the databases referenced by a loaded suspicion rule are downloaded, nothing is downloaded while no rule uses a `country` or `asn` fact. While a database is not available, for example because the first download failed, the update is retried every `MCR.WAF.GeoIP.RetryIntervalMinutes` minutes. Every download is aborted after 5 minutes.
 
 Private, loopback, link local, unique local (IPv6) and shared CGNAT addresses (`100.64.0.0/10`) are never looked up. GeoIP rules therefore never match local test systems or clients in a VPN with private addresses.
 
@@ -251,8 +284,8 @@ Private, loopback, link local, unique local (IPv6) and shared CGNAT addresses (`
 |----------------------------------------------|--------------------------------------|--------------------------------------------------------------------------------------------|
 | `MCR.WAF.GeoIP.Directory`                    | `%MCR.datadir%/waf/geoip`            | Directory of the database files. An empty value disables GeoIP.                            |
 | `MCR.WAF.GeoIP.UpdateIntervalHours`          | `24`                                 | Interval between two update checks.                                                       |
-| `MCR.WAF.GeoIP.Databases`                    | `country,asn`                        | Names of the databases, referenced by the `database` attribute of the facts.              |
-| `MCR.WAF.GeoIP.Database.<name>.File`         | `user-country.mmdb`, `origin-asn.mmdb` | File name in the directory.                                                             |
+| `MCR.WAF.GeoIP.RetryIntervalMinutes`         | `15`                                 | Interval between two attempts while a database is not available yet.                      |
+| `MCR.WAF.GeoIP.Database.<name>.File`         | `user-country.mmdb`, `origin-asn.mmdb` | File name in the directory. `<name>` is `country` or `asn`, or the `database` attribute of a fact. |
 | `MCR.WAF.GeoIP.Database.<name>.URL`          | ip-location-db release               | Download URL. Empty: only the local file is used.                                         |
 | `MCR.WAF.GeoIP.Database.<name>.ChecksumURL`  | ip-location-db checksum release      | URL of the SHA-256 checksum (`sha256sum` format). Empty: download when the file is older than the update interval. |
 
@@ -277,7 +310,7 @@ Templates use `{{key}}` placeholders. Keys are resolved first from explicitly pa
 - **Proof of Work:** The nonce submitted by the client is validated server-side using SHA-256. The difficulty is embedded in the signed token and cannot be tampered with by the client.
 - **Reverse DNS spoofing:** When `MCR.WAF.VerifyReverseDNS=true` (the default), the plugin performs a forward DNS lookup to confirm that the resolved hostname actually points back to the original IP, preventing DNS spoofing attacks. Additionally, the DNS lookup is only triggered when the User-Agent already identifies the request as a known bot — arbitrary requests never incur a DNS lookup.
 - **Sub resource bypass:** The `Sec-Fetch-Dest` header comes from the client and can be forged, so it is never sufficient on its own. A request also has to be unmapped (static file) or match `MCR.WAF.SubResource.AllowedPaths`. Note that a request to a non-existing path is unmapped as well, so 404 responses are reachable without solving a challenge.
-- **Interaction challenge:** The interaction token is a signed JWT bound to the client IP that carries the checkbox position, so the client cannot move the checkbox. The checkbox only exists on a canvas. Synthetic events created by scripts have `isTrusted=false` and are rejected. Bots that control the browser via the DevTools protocol produce trusted events, which is why the events are logged for later analysis. The canvas checkbox cannot be operated with a keyboard or a screen reader, so it is only shown to clients that match a suspicion rule.
+- **Interaction challenge:** The interaction token is a signed JWT bound to the client IP that carries the checkbox position and its issue time. The checkbox only exists on a canvas, and the time until the result arrives is measured on the server. All recorded events, including `isTrusted`, are reported by the client: a bot that reads the checkbox position from the page or the token can forge them. Bots that control the browser via the DevTools protocol produce trusted events anyway. The events are logged so that such bots can be analyzed. The canvas checkbox cannot be operated with a keyboard or a screen reader, which is why the feature is disabled by default.
 - **Bot detection:** In addition to the PoW check, the plugin inspects the browser fingerprint submitted with the solution (User-Agent, WebDriver flag, screen resolution, language list, etc.) to reject obvious bots even if they manage to solve the hash challenge.
 
 ## License

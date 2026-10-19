@@ -45,11 +45,17 @@ class InteractionValidatorTest {
     }
 
     private void click(double t, double x, double y, boolean trusted, String pointerType) {
+        click(t, x, y, trusted, pointerType, WIDTH, HEIGHT);
+    }
+
+    private void click(double t, double x, double y, boolean trusted, String pointerType, int width, int height) {
         event("pointerdown", t - 80, x, y, trusted, pointerType);
-        event("pointerup", t - 5, x, y, trusted, pointerType);
+        JsonObject pointerUp = event("pointerup", t - 5, x, y, trusted, pointerType);
+        pointerUp.addProperty("w", width);
+        pointerUp.addProperty("h", height);
         JsonObject click = event("click", t, x, y, trusted, pointerType);
-        click.addProperty("w", WIDTH);
-        click.addProperty("h", HEIGHT);
+        click.addProperty("w", width);
+        click.addProperty("h", height);
     }
 
     private void moves(int count) {
@@ -61,7 +67,7 @@ class InteractionValidatorTest {
     private List<String> validate() {
         JsonObject data = new JsonObject();
         data.add("events", events);
-        return validator.validate(data.toString(), BOX_X, BOX_Y);
+        return validator.validate(data.toString(), BOX_X, BOX_Y, 5000);
     }
 
     @Test
@@ -88,9 +94,7 @@ class InteractionValidatorTest {
     void syntheticClickIsRejected() {
         moves(15);
         click(1400, 215, 95, false, null);
-        List<String> problems = validate();
-        assertTrue(problems.contains("3 untrusted events"));
-        assertTrue(problems.contains("no trusted click on the checkbox"));
+        assertEquals(List.of("no trusted click on the checkbox"), validate());
     }
 
     @Test
@@ -104,7 +108,7 @@ class InteractionValidatorTest {
     void tooFastClickIsRejected() {
         moves(15);
         click(300, 215, 95, true, "mouse");
-        assertEquals(List.of("click after 300 ms"), validate());
+        assertEquals(List.of("click after 295 ms"), validate());
     }
 
     @Test
@@ -126,10 +130,48 @@ class InteractionValidatorTest {
 
     @Test
     void invalidDataIsRejected() {
-        assertEquals(List.of("unparsable events"), validator.validate("[]", BOX_X, BOX_Y));
-        assertEquals(List.of("unparsable events"), validator.validate("{\"events\":5}", BOX_X, BOX_Y));
-        assertEquals(List.of("unparsable events"), validator.validate("{", BOX_X, BOX_Y));
-        assertEquals(List.of("unparsable events"), validator.validate(null, BOX_X, BOX_Y));
+        assertEquals(List.of("unparsable events"), validator.validate("[]", BOX_X, BOX_Y, 5000));
+        assertEquals(List.of("unparsable events"), validator.validate("{\"events\":5}", BOX_X, BOX_Y, 5000));
+        assertEquals(List.of("unparsable events"), validator.validate("{", BOX_X, BOX_Y, 5000));
+        assertEquals(List.of("unparsable events"), validator.validate(null, BOX_X, BOX_Y, 5000));
+    }
+
+    @Test
+    void tinyCanvasIsRejected() {
+        // With a 1 x 1 canvas every box position would be clamped to the margin
+        moves(15);
+        click(1400, 30, 30, true, "mouse", 1, 1);
+        assertEquals(List.of("no trusted click on the checkbox"), validate());
+    }
+
+    @Test
+    void forgedTimestampsAreCheckedOnTheServer() {
+        moves(15);
+        click(1400, 215, 95, true, "mouse");
+        JsonObject data = new JsonObject();
+        data.add("events", events);
+        assertEquals(List.of("submitted 50 ms after the page was issued"),
+            validator.validate(data.toString(), BOX_X, BOX_Y, 50));
+    }
+
+    @Test
+    void touchPointerUpWithoutClickIsAccepted() {
+        // iOS may not synthesize a click for a tap on the canvas
+        event("pointerdown", 1300, 215, 95, true, "touch");
+        JsonObject pointerUp = event("pointerup", 1400, 215, 95, true, "touch");
+        pointerUp.addProperty("w", WIDTH);
+        pointerUp.addProperty("h", HEIGHT);
+        assertEquals(List.of(), validate());
+    }
+
+    @Test
+    void unrelatedUntrustedEventsAreIgnored() {
+        // Browser extensions may dispatch synthetic events
+        event("focus", 50, 0, 0, false, null);
+        moves(15);
+        click(1400, 215, 95, true, "mouse");
+        event("keydown", 1500, 0, 0, false, null);
+        assertEquals(List.of(), validate());
     }
 
 }

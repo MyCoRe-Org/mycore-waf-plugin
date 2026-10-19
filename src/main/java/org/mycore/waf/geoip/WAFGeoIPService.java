@@ -14,6 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -26,10 +27,13 @@ import org.mycore.common.events.MCRShutdownHandler;
 import org.mycore.waf.suspicion.GeoIPLookup;
 
 /**
- * Provides the GeoIP databases used by the suspicion rules. The databases are configured in
- * {@code MCR.WAF.GeoIP.*}, stored in {@code MCR.WAF.GeoIP.Directory} and updated in a background
- * thread every {@code MCR.WAF.GeoIP.UpdateIntervalHours} hours. Until a database is available,
- * GeoIP facts cannot be evaluated and rules using them do not match.
+ * Provides the GeoIP databases used by the suspicion rules. Only databases referenced by a loaded
+ * rule are used. They are configured in {@code MCR.WAF.GeoIP.Database.<name>.*}, stored in
+ * {@code MCR.WAF.GeoIP.Directory} and updated in a background thread every
+ * {@code MCR.WAF.GeoIP.UpdateIntervalHours} hours. While a database is not available, for example
+ * because the first download failed, the update is retried every
+ * {@code MCR.WAF.GeoIP.RetryIntervalMinutes} minutes. Until then, GeoIP facts cannot be evaluated
+ * and rules using them do not match.
  * <p>
  * Private, loopback, link local and shared (CGNAT) addresses are never looked up, so GeoIP rules
  * never match local test systems or clients in a VPN with private addresses.
@@ -40,15 +44,18 @@ public class WAFGeoIPService implements GeoIPLookup {
 
     private static final String CONFIG_PREFIX = "MCR.WAF.GeoIP.";
     private static final String CONFIG_DIRECTORY = CONFIG_PREFIX + "Directory";
-    private static final String CONFIG_DATABASES = CONFIG_PREFIX + "Databases";
     private static final String CONFIG_UPDATE_INTERVAL_HOURS = CONFIG_PREFIX + "UpdateIntervalHours";
+    private static final String CONFIG_RETRY_INTERVAL_MINUTES = CONFIG_PREFIX + "RetryIntervalMinutes";
 
     private static final int DEFAULT_UPDATE_INTERVAL_HOURS = 24;
+    private static final int DEFAULT_RETRY_INTERVAL_MINUTES = 15;
 
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(30);
 
-    // IP literals only, so that InetAddress.getByName never performs a DNS lookup
-    private static final Pattern IP_LITERAL = Pattern.compile("[0-9a-fA-F:.]+");
+    // IP literals only, so that InetAddress.getByName never performs a DNS lookup: a dotted quad for
+    // IPv4, hex digits with at least one colon for IPv6. Host names never contain a colon.
+    private static final Pattern IPV4_LITERAL = Pattern.compile("\\d{1,3}(\\.\\d{1,3}){3}");
+    private static final Pattern IPV6_LITERAL = Pattern.compile("[0-9a-fA-F.]*:[0-9a-fA-F:.]*");
 
     // 100.64.0.0/10, shared address space for carrier grade NAT (RFC 6598)
     private static final int CGNAT_PREFIX = 0x64400000;
@@ -58,33 +65,51 @@ public class WAFGeoIPService implements GeoIPLookup {
 
     private ScheduledExecutorService scheduler;
 
+    private Duration updateInterval;
+
+    private Duration retryInterval;
+
+    private HttpClient client;
+
     /**
      * Creates a service for the given databases without starting the update thread.
      *
      * @param databases the databases
      */
     public WAFGeoIPService(List<GeoIPDatabase> databases) {
+        this(databases, Duration.ofHours(DEFAULT_UPDATE_INTERVAL_HOURS),
+            Duration.ofMinutes(DEFAULT_RETRY_INTERVAL_MINUTES));
+    }
+
+    WAFGeoIPService(List<GeoIPDatabase> databases, Duration updateInterval, Duration retryInterval) {
         this.databases = new LinkedHashMap<>();
         databases.forEach(database -> this.databases.put(database.getName(), database));
+        this.updateInterval = updateInterval;
+        this.retryInterval = retryInterval;
     }
 
     /**
      * Creates the service from the configuration and starts the background thread that loads and
-     * updates the databases.
+     * updates the databases. Only the given databases are loaded, so that nothing is downloaded for
+     * rules that do not use GeoIP.
      *
-     * @return the started service, or a service without databases if none are configured
+     * @param databaseNames the names of the databases referenced by the suspicion rules
+     * @return the started service, or a service without databases if none are needed or configured
      */
-    public static WAFGeoIPService start() {
-        List<GeoIPDatabase> databases = loadConfiguration();
+    public static WAFGeoIPService start(Set<String> databaseNames) {
+        List<GeoIPDatabase> databases = databaseNames.isEmpty() ? List.of() : loadConfiguration(databaseNames);
         WAFGeoIPService service = new WAFGeoIPService(databases);
         if (!databases.isEmpty()) {
-            service.startUpdates(MCRConfiguration2.getInt(CONFIG_UPDATE_INTERVAL_HOURS)
-                .orElse(DEFAULT_UPDATE_INTERVAL_HOURS));
+            service.startUpdates(
+                Duration.ofHours(MCRConfiguration2.getInt(CONFIG_UPDATE_INTERVAL_HOURS)
+                    .orElse(DEFAULT_UPDATE_INTERVAL_HOURS)),
+                Duration.ofMinutes(MCRConfiguration2.getInt(CONFIG_RETRY_INTERVAL_MINUTES)
+                    .orElse(DEFAULT_RETRY_INTERVAL_MINUTES)));
         }
         return service;
     }
 
-    private static List<GeoIPDatabase> loadConfiguration() {
+    private static List<GeoIPDatabase> loadConfiguration(Set<String> databaseNames) {
         List<GeoIPDatabase> databases = new ArrayList<>();
         Optional<String> directory;
         try {
@@ -99,15 +124,11 @@ public class WAFGeoIPService implements GeoIPLookup {
         }
         int intervalHours = MCRConfiguration2.getInt(CONFIG_UPDATE_INTERVAL_HOURS)
             .orElse(DEFAULT_UPDATE_INTERVAL_HOURS);
-        for (String name : MCRConfiguration2.getString(CONFIG_DATABASES).orElse("").split(",")) {
-            name = name.trim();
-            if (name.isEmpty()) {
-                continue;
-            }
+        for (String name : databaseNames) {
             String prefix = CONFIG_PREFIX + "Database." + name + ".";
             Optional<String> fileName = MCRConfiguration2.getString(prefix + "File");
             if (fileName.isEmpty()) {
-                LOGGER.error("GeoIP database '{}' has no {}File, ignoring it", name, prefix);
+                LOGGER.error("GeoIP database '{}' is used by suspicion rules, but {}File is not set", name, prefix);
                 continue;
             }
             URI url = MCRConfiguration2.getString(prefix + "URL").filter(value -> !value.isBlank())
@@ -120,8 +141,10 @@ public class WAFGeoIPService implements GeoIPLookup {
         return databases;
     }
 
-    private void startUpdates(int intervalHours) {
-        HttpClient client = HttpClient.newBuilder()
+    private void startUpdates(Duration updateInterval, Duration retryInterval) {
+        this.updateInterval = updateInterval;
+        this.retryInterval = retryInterval;
+        this.client = HttpClient.newBuilder()
             .connectTimeout(CONNECT_TIMEOUT)
             .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
@@ -130,11 +153,30 @@ public class WAFGeoIPService implements GeoIPLookup {
             thread.setDaemon(true);
             return thread;
         });
-        scheduler.scheduleWithFixedDelay(() -> updateAll(client), 0, intervalHours, TimeUnit.HOURS);
+        scheduler.execute(this::updateAndReschedule);
         MCRShutdownHandler.getInstance().addCloseable(this::stop);
     }
 
-    private void updateAll(HttpClient client) {
+    private void updateAndReschedule() {
+        updateAll();
+        if (Thread.currentThread().isInterrupted() || scheduler.isShutdown()) {
+            return;
+        }
+        Duration delay = nextDelay();
+        LOGGER.debug("Next GeoIP update check in {}", delay);
+        scheduler.schedule(this::updateAndReschedule, delay.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Returns the delay until the next update check: the retry interval while a database could not
+     * be loaded yet, for example because the first download failed, the update interval otherwise.
+     */
+    Duration nextDelay() {
+        boolean allAvailable = databases.values().stream().allMatch(GeoIPDatabase::isAvailable);
+        return allAvailable ? updateInterval : retryInterval;
+    }
+
+    private void updateAll() {
         for (GeoIPDatabase database : databases.values()) {
             try {
                 database.update(client);
@@ -183,7 +225,7 @@ public class WAFGeoIPService implements GeoIPLookup {
      * @return the parsed address, or null if it is no IP literal or not public
      */
     static InetAddress parsePublicAddress(String address) {
-        if (!IP_LITERAL.matcher(address).matches()) {
+        if (!IPV4_LITERAL.matcher(address).matches() && !IPV6_LITERAL.matcher(address).matches()) {
             return null;
         }
         InetAddress inetAddress;

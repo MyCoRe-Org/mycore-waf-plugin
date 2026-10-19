@@ -13,6 +13,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.junit.Before;
 import org.junit.Test;
 import org.mycore.common.MCRTestCase;
@@ -159,7 +160,8 @@ public class WAFSuspicionRulesTest extends MCRTestCase {
     @Test
     public void unknownTimezoneIsSuspicious() {
         JsonObject info = browser(CHROME_WINDOWS, "Win32", "Etc/Unknown", 0, "1920x1080", 8, "zh-CN");
-        assertEquals(List.of("missing-timezone", "timezone-offset-mismatch"), evaluate(defaultRules, info));
+        // Etc/Unknown is not known to the JVM, so the offset cannot be checked
+        assertEquals(List.of("missing-timezone"), evaluate(defaultRules, info));
     }
 
     @Test
@@ -276,6 +278,37 @@ public class WAFSuspicionRulesTest extends MCRTestCase {
             ? Map.of("country", Map.of("iso_code", "US"))
             : null;
         assertEquals(List.of("outside-europe"), evaluate(defaultRules, regularBrowser()));
+    }
+
+    @Test
+    public void unknownTimezoneIdIsNoMismatch() {
+        // Newer IANA names may be unknown to an older JDK
+        JsonObject info = regularBrowser();
+        info.addProperty("timezone", "Europe/Neverland");
+        assertEquals(List.of(), evaluate(defaultRules, info));
+    }
+
+    @Test
+    public void undeterminableFactDoesNotDependOnOrder() {
+        SuspicionList list = WAFSuspicionRules.loadSuspicionList("waf/suspicion-list-geoip-order.xml");
+        assertNotNull(list);
+        WAFSuspicionRules rules = new WAFSuspicionRules(List.of(list));
+        JsonObject info = browser(CHROME_WINDOWS, "Win32", "Asia/Shanghai", -480, "1920x1080", 8, "zh-CN");
+        userAgentHeader = CHROME_WINDOWS;
+
+        // Without GeoIP data no rule may match, whatever the order of the facts
+        assertEquals(List.of(), find(rules, info.toString(), "192.0.2.10", "/"));
+
+        geoIP("CN", 4134);
+        assertEquals(List.of("or-value-first", "or-country-first", "not-and"),
+            find(rules, info.toString(), "192.0.2.10", "/"));
+    }
+
+    @Test
+    public void referencedGeoIPDatabasesAreCollected() {
+        assertEquals(Set.of("asn", "country"), defaultRules.getGeoIPDatabases());
+        SuspicionList testList = WAFSuspicionRules.loadSuspicionList("waf/suspicion-list-test.xml");
+        assertEquals(Set.of(), new WAFSuspicionRules(List.of(testList)).getGeoIPDatabases());
     }
 
 }

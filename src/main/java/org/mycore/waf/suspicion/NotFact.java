@@ -4,6 +4,7 @@ import jakarta.xml.bind.annotation.XmlAccessType;
 import jakarta.xml.bind.annotation.XmlAccessorType;
 import jakarta.xml.bind.annotation.XmlElement;
 import jakarta.xml.bind.annotation.XmlElements;
+import java.util.Set;
 
 /**
  * A fact that inverts its single contained fact. Never matches if it contains no fact.
@@ -32,6 +33,13 @@ public class NotFact extends ClientFact {
     @Override
     public boolean matches(ClientInformation information) {
         return fact != null && !fact.matches(information);
+    }
+
+    @Override
+    void collectGeoIPDatabases(Set<String> databases) {
+        if (fact != null) {
+            fact.collectGeoIPDatabases(databases);
+        }
     }
 
     @Override

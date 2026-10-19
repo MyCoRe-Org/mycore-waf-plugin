@@ -5,7 +5,7 @@ import jakarta.xml.bind.annotation.XmlAccessorType;
 import jakarta.xml.bind.annotation.XmlAttribute;
 import java.util.List;
 import java.util.regex.Pattern;
-import java.util.regex.PatternSyntaxException;
+import org.mycore.waf.WAFRegex;
 
 /**
  * Base class for facts that match a Java regex against values. The regex must match a whole
@@ -53,15 +53,7 @@ public abstract class PatternFact extends ClientFact {
     }
 
     private Pattern compile() {
-        if (pattern == null) {
-            throw new IllegalArgumentException("Missing regular expression in " + getClass().getSimpleName());
-        }
-        try {
-            return Pattern.compile(pattern);
-        } catch (PatternSyntaxException e) {
-            throw new IllegalArgumentException("Invalid regular expression '" + pattern + "' in "
-                + getClass().getSimpleName() + ": " + e.getMessage(), e);
-        }
+        return WAFRegex.requireValidPattern(pattern, getClass().getSimpleName());
     }
 
     @Override

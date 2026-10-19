@@ -6,7 +6,10 @@
 
     const config = {{interaction_config}};
     const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
-    const MAX_EVENTS = 2000;
+    // Pointer moves and other events are capped separately, so that a long recording never drops
+    // the events that activate the checkbox. Those are always recorded.
+    const MAX_MOVES = 1500;
+    const MAX_OTHER_EVENTS = 500;
     const MOVE_INTERVAL_MILLIS = 16;
     const LABEL_GAP = 10;
 
@@ -14,6 +17,8 @@
     const ctx = canvas.getContext('2d');
     const start = performance.now();
     const events = [];
+    let recordedMoves = 0;
+    let recordedOthers = 0;
 
     let width = 0;
     let height = 0;
@@ -49,8 +54,17 @@
     }
 
     function record(event, extra) {
-        if (events.length >= MAX_EVENTS) {
-            return;
+        const always = event.type === 'click' || event.type === 'pointerdown' || event.type === 'pointerup';
+        if (event.type === 'pointermove') {
+            if (recordedMoves >= MAX_MOVES) {
+                return;
+            }
+            recordedMoves++;
+        } else if (!always) {
+            if (recordedOthers >= MAX_OTHER_EVENTS) {
+                return;
+            }
+            recordedOthers++;
         }
         const entry = { type: event.type, t: elapsed(), trusted: event.isTrusted };
         const point = event.changedTouches && event.changedTouches.length > 0 ? event.changedTouches[0] : event;
@@ -237,8 +251,8 @@
         }
     }, { capture: true, passive: true });
 
-    for (const type of ['pointerdown', 'pointerup', 'pointercancel', 'touchstart', 'touchend', 'wheel', 'keydown',
-        'focus', 'blur']) {
+    for (const type of ['pointerdown', 'pointercancel', 'touchstart', 'touchend', 'wheel', 'keydown', 'focus',
+        'blur']) {
         window.addEventListener(type, record, { capture: true, passive: true });
     }
 
@@ -251,8 +265,7 @@
         record(event, { w: width, h: height });
     });
 
-    window.addEventListener('click', function (event) {
-        record(event, { w: width, h: height });
+    function activate(event) {
         if (checked || !isOnBox(event.clientX, event.clientY)) {
             return;
         }
@@ -260,7 +273,23 @@
         canvas.style.cursor = 'default';
         draw();
         setTimeout(submit, 300);
+    }
+
+    window.addEventListener('pointerup', function (event) {
+        record(event, { w: width, h: height });
+        // iOS does not always synthesize a click for a tap on a canvas, so touch and pen input
+        // activates the checkbox on pointerup
+        if (event.pointerType === 'touch' || event.pointerType === 'pen') {
+            activate(event);
+        }
+    }, { capture: true, passive: true });
+
+    window.addEventListener('click', function (event) {
+        record(event, { w: width, h: height });
     }, true);
+
+    // Registered on the canvas itself, so that mobile browsers consider it clickable
+    canvas.addEventListener('click', activate);
 
     resize();
 })();

@@ -6,6 +6,8 @@ import jakarta.xml.bind.annotation.XmlElement;
 import jakarta.xml.bind.annotation.XmlRootElement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * Root element of a suspicion rule file. Contains any number of {@code rule} elements. A client
@@ -29,6 +31,17 @@ public class SuspicionList {
      */
     public List<String> findMatchingRules(ClientInformation information) {
         return rules.stream().filter(rule -> rule.matches(information)).map(SuspicionRule::getName).toList();
+    }
+
+    /**
+     * Returns the names of the GeoIP databases the rules look up.
+     *
+     * @return the database names, empty if no rule uses a GeoIP fact
+     */
+    public Set<String> getGeoIPDatabases() {
+        Set<String> databases = new TreeSet<>();
+        rules.forEach(rule -> rule.collectGeoIPDatabases(databases));
+        return databases;
     }
 
     /**

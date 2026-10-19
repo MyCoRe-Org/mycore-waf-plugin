@@ -214,7 +214,7 @@ class GeoIPDatabaseTest {
     void privateAddressesAreNotLookedUp() {
         for (String address : List.of("10.1.2.3", "172.16.0.1", "192.168.178.20", "127.0.0.1", "169.254.10.10",
             "100.64.1.1", "100.127.255.255", "0.0.0.0", "::1", "fd12:3456::1", "fe80::1", "224.0.0.1",
-            "example.org", "")) {
+            "example.org", "", "cafe", "dead.beef", "1.2.3", "1.2.3.4.5")) {
             assertNull(WAFGeoIPService.parsePublicAddress(address), address);
         }
         for (String address : List.of("141.35.1.1", "100.63.255.255", "100.128.0.1", "2a00:1450:4001::1")) {
@@ -233,6 +233,46 @@ class GeoIPDatabaseTest {
         assertNull(service.lookup("asn", "81.2.69.160"), "unknown database");
         assertNull(service.lookup("country", "192.168.1.1"), "private address");
         assertNull(service.lookup("country", null));
+    }
+
+    @Test
+    void stalledDownloadIsAborted() throws Exception {
+        byte[] database = resource(ASN_TEST_DB);
+        server.createContext("/stalled.mmdb", exchange -> {
+            exchange.sendResponseHeaders(200, database.length);
+            OutputStream output = exchange.getResponseBody();
+            output.write(database, 0, 100);
+            output.flush();
+            try {
+                Thread.sleep(10_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            exchange.close();
+        });
+        GeoIPDatabase stalled = new GeoIPDatabase("db", directory.resolve("db.mmdb"), uri("/stalled.mmdb"), null,
+            Duration.ofDays(1), Duration.ofMillis(500));
+
+        long start = System.nanoTime();
+        IOException exception = assertThrows(IOException.class, () -> stalled.update(client));
+
+        assertTrue(exception.getMessage().contains("did not complete"), exception.getMessage());
+        assertTrue(Duration.ofNanos(System.nanoTime() - start).toSeconds() < 5);
+        assertFalse(stalled.isAvailable());
+    }
+
+    @Test
+    void missingDatabaseIsRetriedSooner() throws Exception {
+        Path file = directory.resolve("country.mmdb");
+        GeoIPDatabase database = new GeoIPDatabase("country", file, null, null, Duration.ofDays(1));
+        WAFGeoIPService service = new WAFGeoIPService(List.of(database), Duration.ofHours(24),
+            Duration.ofMinutes(15));
+
+        assertEquals(Duration.ofMinutes(15), service.nextDelay());
+
+        Files.write(file, resource(COUNTRY_TEST_DB));
+        database.load();
+        assertEquals(Duration.ofHours(24), service.nextDelay());
     }
 
 }
