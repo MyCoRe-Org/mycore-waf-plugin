@@ -39,15 +39,16 @@
         <artifactId>maven-shade-plugin</artifactId>
         <executions>
           <execution>
-            <phase>package</phase>
             <goals>
               <goal>shade</goal>
             </goals>
+            <phase>package</phase>
             <configuration>
               <!-- The plugin is installed by copying the JAR into the lib directory of the application, which
                 does not resolve dependencies. All dependencies that MyCoRe provides are in scope provided, the
                 remaining ones are included and relocated to avoid conflicts with other versions. -->
               <createDependencyReducedPom>true</createDependencyReducedPom>
+              <dependencyReducedPomLocation>${project.build.directory}/dependency-reduced-pom.xml</dependencyReducedPomLocation>
               <!-- Only the listed artifacts are included, everything else comes with MyCoRe -->
               <artifactSet>
                 <includes>
@@ -72,6 +73,15 @@
             </configuration>
           </execution>
         </executions>
+      </plugin>
+
+      <plugin>
+        <groupId>com.github.ekryd.sortpom</groupId>
+        <artifactId>sortpom-maven-plugin</artifactId>
+        <configuration>
+          <!-- The shade plugin replaces the project file with the dependency reduced POM -->
+          <pomFile>${project.basedir}/pom.xml</pomFile>
+        </configuration>
       </plugin>
 
       <plugin>
@@ -143,6 +153,11 @@
 
   <dependencies>
     <dependency>
+      <groupId>com.maxmind.db</groupId>
+      <artifactId>maxmind-db</artifactId>
+      <version>4.2.0</version>
+    </dependency>
+    <dependency>
       <groupId>com.auth0</groupId>
       <artifactId>java-jwt</artifactId>
       <scope>provided</scope>
@@ -176,11 +191,6 @@
       <groupId>org.mycore</groupId>
       <artifactId>mycore-base</artifactId>
       <scope>provided</scope>
-    </dependency>
-    <dependency>
-      <groupId>com.maxmind.db</groupId>
-      <artifactId>maxmind-db</artifactId>
-      <version>4.2.0</version>
     </dependency>
     <dependency>
       <groupId>junit</groupId>
