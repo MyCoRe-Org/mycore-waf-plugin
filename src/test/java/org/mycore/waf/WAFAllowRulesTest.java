@@ -46,6 +46,7 @@ public class WAFAllowRulesTest extends MCRTestCase {
         HttpServletRequest request = mock(HttpServletRequest.class);
         when(request.getMethod()).thenReturn(method);
         when(request.getRequestURI()).thenReturn(path);
+        when(request.getServletPath()).thenReturn(path);
         when(request.getContextPath()).thenReturn("");
         when(request.getScheme()).thenReturn("http");
         when(request.getServerName()).thenReturn("localhost");
@@ -88,6 +89,7 @@ public class WAFAllowRulesTest extends MCRTestCase {
     public void contextPathIsStrippedFromRequestPath() {
         HttpServletRequest request = request("GET", "/myapp/sru");
         when(request.getContextPath()).thenReturn("/myapp");
+        when(request.getServletPath()).thenReturn("/sru");
         when(request.getParameterMap()).thenReturn(Map.of("style", new String[] { "xml" }));
         assertTrue(allowList.isAllowed(request));
     }

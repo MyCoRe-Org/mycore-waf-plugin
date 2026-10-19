@@ -159,12 +159,12 @@ MCR.WAF.SubResource.AllowedPaths=%MCR.WAF.SubResource.AllowedPaths%,/my-assets/.
 
 ### Reverse DNS Cache
 
-Reverse DNS lookups are expensive. Results are cached in a bounded `MCRCache`.
+Reverse DNS lookups are expensive. Results are cached in a bounded `MCRCache`. Failed lookups (no reverse DNS entry, failed forward verification) are cached as well, so a client that fakes a known bot User-Agent triggers at most one lookup per IP and TTL. Concurrent requests from the same IP share a single lookup.
 
 | Property                     | Default | Description                                                                   |
 |------------------------------|---------|-------------------------------------------------------------------------------|
 | `MCR.WAF.DNSCacheCapacity`   | `1000`  | Maximum number of IPs held in the cache (LRU eviction).                       |
-| `MCR.WAF.DNSCacheTTLMinutes` | `60`    | How long a cached hostname is considered valid before the lookup is repeated. |
+| `MCR.WAF.DNSCacheTTLMinutes` | `60`    | How long a cached result (hostname or failed lookup) is considered valid before the lookup is repeated. |
 
 ### Proof of Work Challenge
 
