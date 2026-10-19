@@ -16,6 +16,9 @@ public class WAFFilter extends HttpFilter {
 
   private static final Logger LOGGER = LogManager.getLogger();
 
+  // Limits client controlled values in the log, the client information of a browser is far shorter
+  private static final int MAX_LOGGED_VALUE_LENGTH = 2000;
+
   @Override
   public void init() throws ServletException {
     super.init();
@@ -90,12 +93,14 @@ public class WAFFilter extends HttpFilter {
           ipInfo);
       if (wafService.isValidSolution(req)) {
         LOGGER.debug("{} WAF challenge solution is valid. Creating WAF-PASSED cookie and redirecting to original URL.", ipInfo);
+        logChallengeResult(req, "solved");
         wafService.createWAFPassedCookie(req, res);
         wafService.redirectAfterChallenge(req, res);
         return false;
       } else {
         LOGGER.debug("{} WAF challenge solution is invalid. Incrementing attempt and redirecting to challenge page.",
             ipInfo);
+        logChallengeResult(req, "solution rejected");
         wafService.redirectAfterFailedAttempt(req, res);
         return false;
       }
@@ -114,5 +119,36 @@ public class WAFFilter extends HttpFilter {
     return false;
   }
 
+  /**
+   * Logs the outcome of a challenge solution together with the User-Agent and the client
+   * information sent by the challenge page, so that browsers and scripts solving the challenge can
+   * be told apart without enabling debug logging.
+   *
+   * @param req the challenge solution request
+   * @param result the outcome to log
+   */
+  private static void logChallengeResult(HttpServletRequest req, String result) {
+    LOGGER.info("{} WAF challenge {}. User-Agent: {} Client information: {}",
+        MCRFrontendUtil.getRemoteAddr(req), result,
+        sanitizeForLog(req.getHeader("User-Agent")),
+        sanitizeForLog(req.getParameter(DefaultWAFService.CLIENT_INFORMATION_PARAMETER)));
+  }
 
+  /**
+   * Prepares a client controlled value for the log: control characters are replaced so that a
+   * client cannot forge additional log lines, and overly long values are truncated.
+   *
+   * @param value the value to sanitize, may be null
+   * @return the sanitized value, or "-" if the value is null
+   */
+  static String sanitizeForLog(String value) {
+    if (value == null) {
+      return "-";
+    }
+    String sanitized = value.replaceAll("\\p{Cntrl}", "?");
+    if (sanitized.length() > MAX_LOGGED_VALUE_LENGTH) {
+      return sanitized.substring(0, MAX_LOGGED_VALUE_LENGTH) + "...";
+    }
+    return sanitized;
+  }
 }

@@ -4,11 +4,11 @@ import jakarta.servlet.http.HttpServletMapping;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.MappingMatch;
 import java.net.InetAddress;
-import java.net.URI;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -216,10 +216,10 @@ public class WAFAllowListChecker {
       return false;
     }
 
-    String requestURI = getApplicationRelativePath(request);
+    String path = getApplicationRelativePath(request);
     for (Pattern pattern : allowedPathPatterns) {
-      if (pattern.matcher(requestURI).matches()) {
-        LOGGER.debug("Path {} matches allow list pattern: {}", requestURI, pattern);
+      if (pattern.matcher(path).matches()) {
+        LOGGER.debug("Path {} matches allow list pattern: {}", path, pattern);
         return true;
       }
     }
@@ -227,22 +227,21 @@ public class WAFAllowListChecker {
   }
 
   /**
-   * Returns the request URI relative to the application base URL, i.e. with the context path
-   * stripped off.
+   * Returns the request path relative to the context path, as decoded and normalized by the
+   * servlet container.
+   * <p>
+   * The raw {@link HttpServletRequest#getRequestURI()} must not be used here: it is neither decoded
+   * nor normalized, while the container resolves dot segments and strips path parameters before it
+   * dispatches the request. A request like {@code /api/..;/receive/foo} would then match an allow
+   * list pattern for {@code /api/.*} but actually be served by {@code /receive/foo}.
    *
    * @param request the HTTP request
-   * @return the application relative path
+   * @return the normalized, context relative path
    */
-  private String getApplicationRelativePath(HttpServletRequest request) {
-    String basePath = URI.create(MCRFrontendUtil.getBaseURL(request)).getPath();
-    if (basePath.endsWith("/")) {
-      basePath = basePath.substring(0, basePath.length() - 1);
-    }
-    String requestURI = request.getRequestURI();
-    if (!basePath.isEmpty() && requestURI.startsWith(basePath)) {
-      requestURI = requestURI.substring(basePath.length());
-    }
-    return requestURI;
+  static String getApplicationRelativePath(HttpServletRequest request) {
+    String servletPath = Objects.toString(request.getServletPath(), "");
+    String pathInfo = Objects.toString(request.getPathInfo(), "");
+    return servletPath + pathInfo;
   }
 
   /**
@@ -422,10 +421,10 @@ public class WAFAllowListChecker {
       return true;
     }
 
-    String requestURI = getApplicationRelativePath(request);
+    String path = getApplicationRelativePath(request);
     for (Pattern pattern : allowedSubResourcePathPatterns) {
-      if (pattern.matcher(requestURI).matches()) {
-        LOGGER.debug("Sub resource path {} matches allow list pattern: {}", requestURI, pattern);
+      if (pattern.matcher(path).matches()) {
+        LOGGER.debug("Sub resource path {} matches allow list pattern: {}", path, pattern);
         return true;
       }
     }
