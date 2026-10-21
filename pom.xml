@@ -27,7 +27,7 @@
             <manifestEntries>
               <MCR-Artifact-Id>${project.artifactId}</MCR-Artifact-Id>
               <MCR-Application-Module>${project.name}</MCR-Application-Module>
-              <Priority>99</Priority>
+              <Priority>80</Priority>
               <MCR-Auto-Deploy>true</MCR-Auto-Deploy>
             </manifestEntries>
           </archive>

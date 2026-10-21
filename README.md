@@ -189,7 +189,7 @@ The page records the events that lead to the click (pointer moves, pointer down/
 
 The recorded events are reported by the client. A bot that reads the checkbox position from the page can forge them with a single request. The interaction challenge therefore raises the cost for bots and collects data about them, it cannot prove human input.
 
-The outcome is logged at `INFO` together with the matching rule names. The complete recorded events are logged at `DEBUG` by `org.mycore.waf.WAFFilter`, so that bots that learn to pass the interaction challenge can be analyzed.
+The outcome is logged at `DEBUG` by `org.mycore.waf.WAFFilter` together with the matching rule names, as are the complete recorded events, so that bots that learn to pass the interaction challenge can be analyzed.
 
 | Property                               | Default                             | Description                                                                                                  |
 |----------------------------------------|-------------------------------------|--------------------------------------------------------------------------------------------------------------|
