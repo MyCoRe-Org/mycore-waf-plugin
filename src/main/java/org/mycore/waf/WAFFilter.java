@@ -8,7 +8,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.List;
-import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.mycore.frontend.MCRFrontendUtil;
@@ -109,20 +108,20 @@ public class WAFFilter extends HttpFilter {
       if (wafService.isValidSolution(req)) {
         List<String> suspicionReasons = wafService.findSuspicionReasons(req);
         if (!suspicionReasons.isEmpty()) {
-          logChallengeResult(req, Level.INFO, "solved, but the client is suspicious " + suspicionReasons
+          logChallengeResult(req, "solved, but the client is suspicious " + suspicionReasons
               + ", showing interaction challenge");
           wafService.generateInteractionChallenge(req, res);
           return false;
         }
         LOGGER.debug("{} WAF challenge solution is valid. Creating WAF-PASSED cookie and redirecting to original URL.", ipInfo);
-        logChallengeResult(req, Level.DEBUG, "solved");
+        logChallengeResult(req, "solved");
         wafService.createWAFPassedCookie(req, res);
         wafService.redirectAfterChallenge(req, res);
         return false;
       } else {
         LOGGER.debug("{} WAF challenge solution is invalid. Incrementing attempt and redirecting to challenge page.",
             ipInfo);
-        logChallengeResult(req, Level.INFO, "solution rejected");
+        logChallengeResult(req, "solution rejected");
         wafService.redirectAfterFailedAttempt(req, res);
         return false;
       }
@@ -155,11 +154,11 @@ public class WAFFilter extends HttpFilter {
     List<String> problems = wafService.checkInteraction(req);
     String userAgent = sanitizeForLog(req.getHeader("User-Agent"));
     if (problems.isEmpty()) {
-      LOGGER.info("{} WAF interaction challenge solved. User-Agent: {}", remoteAddress, userAgent);
+      LOGGER.debug("{} WAF interaction challenge solved. User-Agent: {}", remoteAddress, userAgent);
       wafService.createWAFPassedCookie(req, res);
       wafService.redirectAfterChallenge(req, res);
     } else {
-      LOGGER.info("{} WAF interaction challenge rejected {}. User-Agent: {}", remoteAddress,
+      LOGGER.debug("{} WAF interaction challenge rejected {}. User-Agent: {}", remoteAddress,
           sanitizeForLog(problems.toString()), userAgent);
       wafService.redirectAfterFailedAttempt(req, res);
     }
@@ -169,18 +168,17 @@ public class WAFFilter extends HttpFilter {
   /**
    * Logs the outcome of a challenge solution together with the User-Agent and the client
    * information sent by the challenge page, so that browsers and scripts solving the challenge can
-   * be told apart. Solved challenges are frequent and logged at debug level only, rejected
-   * solutions are logged at info level.
+   * be told apart. All outcomes are logged at debug level, so that the log does not fill up with
+   * client data during normal operation.
    *
    * @param req the challenge solution request
-   * @param level the log level to use
    * @param result the outcome to log
    */
-  private static void logChallengeResult(HttpServletRequest req, Level level, String result) {
-    if (!LOGGER.isEnabled(level)) {
+  private static void logChallengeResult(HttpServletRequest req, String result) {
+    if (!LOGGER.isDebugEnabled()) {
       return;
     }
-    LOGGER.log(level, "{} WAF challenge {}. User-Agent: {} Client information: {}",
+    LOGGER.debug("{} WAF challenge {}. User-Agent: {} Client information: {}",
         MCRFrontendUtil.getRemoteAddr(req), result,
         sanitizeForLog(req.getHeader("User-Agent")),
         sanitizeForLog(req.getParameter(DefaultWAFService.CLIENT_INFORMATION_PARAMETER)));
