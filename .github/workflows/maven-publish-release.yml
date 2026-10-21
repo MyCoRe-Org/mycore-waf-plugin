@@ -10,18 +10,10 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-      - name: Determine Java version
-        id: java-version
-        run: |
-          if [[ "${{ github.event.release.target_commitish }}" == "master" ]]; then
-            echo "version=25" >> $GITHUB_OUTPUT
-          else
-            echo "version=21" >> $GITHUB_OUTPUT
-          fi
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
-          java-version: ${{ steps.java-version.outputs.version }}
+          java-version: '25'
           distribution: 'temurin'
           server-id: 'central'
           server-username: SONATYPE_USERNAME
